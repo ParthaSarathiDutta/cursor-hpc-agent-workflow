@@ -87,6 +87,6 @@ slurm/            Batch and interactive job templates
 
 | Placeholder | Replace with |
 |-------------|--------------|
-| `pdutta3` | Your NERSC username (in `config/ssh-config.snippet`) |
+| `YOUR_NERSC_USERNAME` | Your NERSC username (in `config/ssh-config.snippet`) |
 | `YOUR_GPU_ACCOUNT_g` | Your GPU Slurm account |
 | BLAST env/modules | Your `module load` / `conda activate` in Slurm scripts |
