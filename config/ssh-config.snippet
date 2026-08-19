@@ -1,0 +1,26 @@
+# NERSC Perlmutter SSH config for Cursor Remote SSH
+# Install: run scripts/setup-perlmutter-ssh.sh
+# Requires: sshproxy key at ~/.ssh/nersc (run scripts/setup-sshproxy.sh daily)
+
+Host perlmutter perlmutter.nersc.gov
+    HostName perlmutter.nersc.gov
+    User pdutta3
+    IdentityFile ~/.ssh/nersc
+    IdentitiesOnly yes
+    ForwardAgent yes
+    LogLevel QUIET
+
+Host dtn*.nersc.gov *.nersc.gov
+    IdentityFile ~/.ssh/nersc
+    IdentitiesOnly yes
+    ForwardAgent yes
+    LogLevel QUIET
+
+# Optional: connect Cursor directly to an allocated GPU compute node (Level 2a)
+# After salloc returns a node like nid200021, use: Remote-SSH -> nid200021
+Host nid??????
+    IdentityFile ~/.ssh/nersc
+    StrictHostKeyChecking no
+    ProxyJump perlmutter.nersc.gov
+    Hostname %h
+    LogLevel QUIET

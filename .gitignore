@@ -1,0 +1,13 @@
+# OS / editor
+.DS_Store
+*.swp
+
+# Logs (Slurm output stays local on Perlmutter)
+logs/*.out
+logs/*.err
+slurm-*.out
+
+# Local secrets — never commit
+.env
+*.pem
+.ssh/

@@ -1,0 +1,44 @@
+---
+description: NERSC Perlmutter and BLAST workflow conventions for Cursor Agent
+globs:
+  - "**/*.slurm"
+  - "**/*.sh"
+  - "**/*.yaml"
+  - "**/*.yml"
+  - "**/slurm/**"
+  - "**/scripts/**"
+alwaysApply: true
+---
+
+# NERSC Perlmutter + BLAST
+
+## Architecture
+
+- Cursor runs locally; Remote SSH targets **Perlmutter login nodes** only for editing and job submission.
+- **Never** run BLAST training, GPU workloads, or large MD on login nodes.
+- Submit compute via Slurm: `sbatch slurm/*.slurm` or `salloc` with `--constraint gpu`.
+
+## Slurm conventions (Perlmutter GPU)
+
+- GPU account must end in `_g` (e.g. `m1234_g`).
+- Always set `#SBATCH -C gpu` and request GPUs explicitly (`--gpus-per-node` or `--gpus`).
+- Use `#SBATCH -q regular` for batch; `--qos interactive` for `salloc`.
+- Log to `logs/` with `%j` job id in filenames.
+
+## Storage
+
+- Keep source, configs, and Slurm scripts in project dir under `$HOME` or `$SCRATCH`.
+- Put datasets, checkpoints, and results on `$SCRATCH` (symlinked via `setup-blast-project.sh`).
+- Avoid filling `$HOME` — quota exhaustion blocks Cursor Remote SSH (`.cursor-server` lives in HOME).
+
+## Agent behavior
+
+- When editing Slurm scripts, preserve account `-A`, GPU constraints, and scratch paths.
+- When diagnosing failures, read `logs/*.out`, `logs/*.err`, and `slurm-*.out`.
+- Prefer lightweight checks on login node; suggest `sbatch` for anything GPU/CPU intensive.
+- Do not hardcode secrets (API keys, tokens) in scripts or configs.
+
+## User-specific placeholders (replace before submit)
+
+- `YOUR_GPU_ACCOUNT_g` → actual NERSC GPU allocation
+- `blast_env` / module loads → user's BLAST environment on Perlmutter

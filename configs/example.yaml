@@ -1,0 +1,18 @@
+# Replace with your BLAST training configuration.
+# Example placeholders — adjust paths to your BLAST workflow.
+
+project_name: blast_example
+scratch_root: ${SCRATCH}/blast_project
+
+data:
+  train_path: datasets/train
+  val_path: datasets/val
+
+training:
+  epochs: 100
+  batch_size: 32
+  learning_rate: 1.0e-3
+
+output:
+  checkpoint_dir: checkpoints
+  results_dir: results
