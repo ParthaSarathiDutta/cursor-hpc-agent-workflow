@@ -1,6 +1,6 @@
-# Cursor + NERSC Perlmutter + BLAST
+# cursor-hpc-agent-workflow
 
-Level 1 integration: **Cursor Remote SSH** to Perlmutter login nodes for BLAST development, with **Slurm** for all heavy compute.
+Agent-assisted development workflow for scientific computing on NERSC Perlmutter — **Cursor Remote SSH**, **Slurm** job orchestration, and HPC-aware agent rules for BLAST force-field workflows.
 
 ## Quick start
 

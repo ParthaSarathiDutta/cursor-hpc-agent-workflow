@@ -7,7 +7,7 @@ Everything in this repo is configured except the **NERSC MFA credential**, which
 In a normal Terminal (not Cursor):
 
 ```bash
-cd /Users/parthasarathidutta/Cursor/IntegrationWithNERSC
+cd ~/cursor-hpc-agent-workflow   # or your clone path
 ./scripts/setup-sshproxy.sh
 ```
 

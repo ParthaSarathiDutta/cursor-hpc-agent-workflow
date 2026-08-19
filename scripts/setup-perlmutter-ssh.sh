@@ -5,8 +5,8 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SNIPPET="${REPO_ROOT}/config/ssh-config.snippet"
 SSH_CONFIG="${HOME}/.ssh/config"
-MARKER="# >>> NERSC Perlmutter (IntegrationWithNERSC) >>>"
-END_MARKER="# <<< NERSC Perlmutter (IntegrationWithNERSC) <<<"
+MARKER="# >>> NERSC Perlmutter (cursor-hpc-agent-workflow) >>>"
+END_MARKER="# <<< NERSC Perlmutter (cursor-hpc-agent-workflow) <<<"
 
 mkdir -p "${HOME}/.ssh"
 chmod 700 "${HOME}/.ssh"
