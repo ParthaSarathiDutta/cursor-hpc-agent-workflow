@@ -48,11 +48,29 @@ else
   fi
 fi
 
+# sshproxy defaults to the local macOS username; NERSC usernames often differ.
+NERSC_USER="${NERSC_USERNAME:-}"
+if [[ -z "${NERSC_USER}" ]] && [[ -f "${HOME}/.ssh/config" ]]; then
+  NERSC_USER="$(awk '
+    /^Host / { in_block=0 }
+    /perlmutter|\.nersc\.gov/ { in_block=1 }
+    in_block && /^[[:space:]]*User[[:space:]]/ {
+      print $2; exit
+    }
+  ' "${HOME}/.ssh/config" 2>/dev/null || true)"
+fi
+if [[ -z "${NERSC_USER}" || "${NERSC_USER}" == "YOUR_NERSC_USERNAME" ]]; then
+  echo "ERROR: Set your NERSC username first."
+  echo "  export NERSC_USERNAME=your_nersc_id"
+  echo "  or set User in ~/.ssh/config for Host perlmutter"
+  exit 1
+fi
+
 echo
-echo "==> Obtaining 24-hour NERSC SSH credential"
-echo "    You will be prompted for Iris password + OTP."
+echo "==> Obtaining 24-hour NERSC SSH credential for ${NERSC_USER}"
+echo "    You will be prompted for Iris password + OTP (password immediately followed by OTP, no space)."
 echo
-sshproxy
+sshproxy -u "${NERSC_USER}"
 
 if [[ -f "${HOME}/.ssh/nersc" ]]; then
   chmod 600 "${HOME}/.ssh/nersc"
