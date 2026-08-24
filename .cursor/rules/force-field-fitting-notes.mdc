@@ -1,0 +1,12 @@
+---
+description: Auto-maintain BLAST force-field fitting notes (always on)
+alwaysApply: true
+---
+
+# Force-field fitting — automatic notes
+
+This project uses skill **force-field-fitting** (`.cursor/skills/force-field-fitting/SKILL.md`).
+
+**Always, without asking the user:** when a task involves BLAST / Tersoff force-field fitting and you learn or confirm something reusable, append a short bullet to [`skills/Force Field Fitting.General.md`](skills/Force%20Field%20Fitting.General.md) before finishing — per the skill's "Mandatory — auto-update notes" section.
+
+Do not duplicate existing bullets. Keep entries brief and material-agnostic.
