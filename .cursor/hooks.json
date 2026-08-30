@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      { "command": "python3 .cursor/hooks/update-status.py sessionStart" }
+    ],
+    "postToolUse": [
+      { "command": "python3 .cursor/hooks/update-status.py postToolUse" }
+    ],
+    "afterShellExecution": [
+      { "command": "python3 .cursor/hooks/update-status.py afterShellExecution" }
+    ],
+    "subagentStart": [
+      { "command": "python3 .cursor/hooks/update-status.py subagentStart" }
+    ],
+    "subagentStop": [
+      { "command": "python3 .cursor/hooks/update-status.py subagentStop" }
+    ],
+    "stop": [
+      { "command": "python3 .cursor/hooks/update-status.py stop" }
+    ],
+    "sessionEnd": [
+      { "command": "python3 .cursor/hooks/update-status.py sessionEnd" }
+    ]
+  }
+}

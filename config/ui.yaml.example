@@ -1,0 +1,12 @@
+ssh_host: perlmutter
+blast_root: /global/cfs/cdirs/m4597/partha/AgenticBLAST
+local_cache: ~/blast-runs-cache
+gpu_account: YOUR_GPU_ACCOUNT_g
+slurm_script: slurm/blast_train.slurm
+trial_target: 1000
+run_folders:
+  - ML-Tersoff-1_PE
+  - ML-Tersoff-1_PE_12
+  - ML-Tersoff-1_PE_hybrid
+status_board_path: .cursor/status/board.json
+plans_dir: .cursor/plans

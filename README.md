@@ -62,13 +62,30 @@ bash scripts/check-home-quota.sh   # run on Perlmutter
 ## Repository layout
 
 ```
-config/           SSH and Cursor setting snippets
+blast_lib/        Shared parsing, metrics, remote helpers for UI + scripts
+ui/               Local Streamlit dashboard (see ui/README.md)
+config/           SSH, Cursor snippets, ui.yaml
 configs/          Example BLAST YAML config
 docs/             Data/AI policy checklist
 scripts/          Setup, verify, monitor, quota helpers
 slurm/            Batch and interactive job templates
 .cursor/rules/    Agent conventions for Perlmutter + BLAST
+.cursor/hooks/    Agent status hooks for the dashboard
 ```
+
+
+## Local dashboard (UI)
+
+Streamlit app for agent activity, BLAST run analysis, Slurm jobs, and strategy suggestions.
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements-ui.txt
+cp config/ui.yaml.example config/ui.yaml   # edit paths
+streamlit run ui/app.py
+```
+
+See [ui/README.md](ui/README.md). Agent status hooks live in `.cursor/hooks.json`.
 
 ## Important rules
 

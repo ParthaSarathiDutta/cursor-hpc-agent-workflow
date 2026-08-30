@@ -5,62 +5,20 @@ Parse BLAST ho.report and plot objective score vs iteration.
 Default report path: reports/ho.report (relative to --workdir).
 
 Example (Perlmutter, psd env has matplotlib):
-  /global/cfs/cdirs/m1917/blast_ff/bin/miniconda3/envs/psd/bin/python analysis.py
-  /global/cfs/cdirs/m1917/blast_ff/bin/miniconda3/envs/psd/bin/python analysis.py --workdir /path/to/run
+  python scripts/analysis_ho_report.py --workdir /path/to/run
 """
 
 from __future__ import annotations
 
 import argparse
 import csv
-import re
+import sys
 from pathlib import Path
 
-FINALOBJ_RE = re.compile(r"^\#\s*([\d.]+)\s*\|\s*finalObj\s*\|")
-INPUT_RE = re.compile(r"^input\s+")
+REPO_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(REPO_ROOT))
 
-
-def parse_ho_report(report_path: Path) -> list[dict]:
-    """Return one record per `input` line in the report."""
-    trials: list[dict] = []
-    current: dict | None = None
-
-    with report_path.open() as fh:
-        for raw_line in fh:
-            line = raw_line.rstrip("\n")
-
-            if INPUT_RE.match(line):
-                current = {
-                    "iteration": len(trials) + 1,
-                    "score": None,
-                    "status": "pending",
-                    "reason": "",
-                }
-                trials.append(current)
-                continue
-
-            if current is None:
-                continue
-
-            if "invalid parameter" in line:
-                current["score"] = 1_000_000.0
-                current["status"] = "invalid"
-                current["reason"] = line.lstrip("# ").strip()
-                current = None
-                continue
-
-            mobj = FINALOBJ_RE.match(line)
-            if mobj:
-                current["score"] = float(mobj.group(1))
-                current["status"] = "final"
-                tail = line.split("| finalObj |", 1)[-1].strip()
-                if "DUMP" in tail:
-                    current["reason"] = tail.split("DUMP", 1)[-1].strip()
-                else:
-                    current["reason"] = tail
-                current = None
-
-    return trials
+from blast_lib.parser import parse_ho_report
 
 
 def write_csv(trials: list[dict], csv_path: Path) -> None:
@@ -102,24 +60,9 @@ def plot_scores(trials: list[dict], plot_path: Path, title: str) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Plot BLAST ho.report score vs iteration.")
-    parser.add_argument(
-        "--workdir",
-        type=Path,
-        default=Path("."),
-        help="Run directory containing reports/ho.report (default: current directory)",
-    )
-    parser.add_argument(
-        "--report",
-        type=Path,
-        default=None,
-        help="Path to ho.report (default: <workdir>/reports/ho.report)",
-    )
-    parser.add_argument(
-        "--out",
-        type=Path,
-        default=None,
-        help="Output PNG path (default: <workdir>/reports/score_vs_iteration.png)",
-    )
+    parser.add_argument("--workdir", type=Path, default=Path("."))
+    parser.add_argument("--report", type=Path, default=None)
+    parser.add_argument("--out", type=Path, default=None)
     args = parser.parse_args()
 
     workdir = args.workdir.resolve()

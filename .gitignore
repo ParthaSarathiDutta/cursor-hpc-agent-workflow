@@ -11,3 +11,11 @@ slurm-*.out
 .env
 *.pem
 .ssh/
+
+# BLAST dashboard runtime state
+.cursor/status/
+config/ui.yaml
+ui/__pycache__/
+blast_lib/__pycache__/
+.venv/
+**/__pycache__/
