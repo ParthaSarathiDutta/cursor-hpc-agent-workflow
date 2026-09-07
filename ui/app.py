@@ -5,7 +5,6 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-# Ensure repo root is on path regardless of how Streamlit is launched.
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -14,6 +13,7 @@ import streamlit as st
 
 from blast_lib.config import load_config
 from blast_lib.remote import ssh_ping, sync_all_runs
+from blast_lib.user_session import connected_run_paths, get_session
 
 st.set_page_config(
     page_title="BLAST Dashboard",
@@ -35,11 +35,11 @@ st.markdown(
 config = load_config()
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)
 def _ssh_status(host: str) -> tuple[bool, str]:
     from blast_lib.config import UIConfig
 
-    return ssh_ping(UIConfig(ssh_host=host), timeout=5)
+    return ssh_ping(UIConfig(ssh_host=host), timeout=15)
 
 
 with st.sidebar:
@@ -47,24 +47,30 @@ with st.sidebar:
     st.caption("Local UI · Perlmutter via SSH")
 
     ok, msg = _ssh_status(config.ssh_host)
+    if st.button("Recheck SSH", use_container_width=True):
+        _ssh_status.clear()
+        st.rerun()
+
     if ok:
         st.success(f"Perlmutter SSH: connected ({config.ssh_host})")
     else:
-        st.error(f"Perlmutter SSH: failed")
-        st.caption(msg)
-        st.markdown(
-            "Run `./scripts/setup-sshproxy.sh` then test: `ssh perlmutter echo ok`"
-        )
+        st.error(f"Perlmutter SSH: failed — {msg}")
+        st.markdown("Run `./scripts/setup-sshproxy.sh` then test: `ssh perlmutter echo ok`")
+
+    session = get_session()
+    run_paths = connected_run_paths(session)
 
     st.divider()
-    if st.button("Sync from Perlmutter", use_container_width=True, disabled=not ok):
+    if not run_paths:
+        st.caption("Connect runs on **User Inputs** to enable sync.")
+    elif st.button("Sync connected runs", use_container_width=True, disabled=not ok):
         with st.spinner("Rsync run reports (may take ~30s)..."):
-            results = sync_all_runs(config)
-        for folder, status in results.items():
+            results = sync_all_runs(config, run_paths)
+        for label, status in results.items():
             if status == "ok":
-                st.success(f"{folder}: synced")
+                st.success(f"{label}: synced")
             else:
-                st.warning(f"{folder}: {status}")
+                st.warning(f"{label}: {status}")
     elif not ok:
         st.caption("Sync disabled until SSH works.")
 
@@ -73,16 +79,25 @@ with st.sidebar:
     st.code(
         f"SSH:  {config.ssh_host}\n"
         f"Cache: {config.local_cache_path}\n"
-        f"Remote: {config.blast_root}",
+        f"Remote default: {config.blast_root}",
         language=None,
     )
 
 st.title("Welcome")
 st.markdown(
-    "Use the sidebar pages to monitor **agent activity**, **BLAST runs**, "
-    "**Slurm jobs**, and **strategy** suggestions."
+    """
+    | Step | Page |
+    |------|------|
+    | **1. User inputs** | **User Inputs** — training data path, Tersoff model (`model.json`), MCTS, run folder path |
+    | **2. Analyze** | **Analyze** — sync and view status, best parameters, predicted properties |
+    | **3. Agent** | **Agent Strategy** — reward / objective design (not a user input) |
+    | **Monitor** | Overview, Run Detail, Compare, Jobs, Agent Activity |
+    """
 )
-st.info("Open **Agent Activity** for live status while the Cursor agent is working.")
+st.info(
+    "You provide every path — the app does not assume run folders. "
+    "Start on **User Inputs**, click **Connect**, then go to **Analyze**."
+)
 st.warning(
     "Use **Safari or Chrome** at http://127.0.0.1:8501 — Cursor's built-in browser "
     "often shows *Connection error* with Streamlit."

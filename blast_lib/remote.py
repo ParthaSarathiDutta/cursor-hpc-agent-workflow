@@ -67,26 +67,71 @@ def sbatch_submit(config: UIConfig, run_folder: str) -> str:
     return ssh_exec(config, remote, timeout=30)
 
 
-def sync_run_folder(config: UIConfig, folder: str) -> tuple[Path, datetime]:
-    src = f"{config.ssh_host}:{config.blast_root}/{folder}/reports/"
-    dest = config.local_cache_path / folder / "reports"
+def sync_run_at_path(config: UIConfig, run_folder_path: str) -> Path:
+    """Sync reports and key files from a user-provided full run path."""
+    from blast_lib.user_session import local_cache_dir
+
+    remote_base = run_folder_path.rstrip("/")
+    if not remote_base.startswith("/"):
+        remote_base = f"{config.blast_root.rstrip('/')}/{remote_base}"
+
+    dest = local_cache_dir(config, remote_base)
     dest.mkdir(parents=True, exist_ok=True)
-    cmd = [
-        "rsync", "-az", "--partial",
-        src, str(dest) + "/",
+    remote_host = f"{config.ssh_host}:{remote_base}"
+
+    specs = [
+        ("reports/", dest / "reports", True),
+        ("settings.json", dest / "settings.json", False),
+        ("model.json", dest / "model.json", False),
+        ("mcts_restart.tersoff", dest / "mcts_restart.tersoff", False),
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    if result.returncode != 0:
-        raise RemoteError(result.stderr.strip() or "rsync failed")
-    return dest.parent, datetime.now(timezone.utc)
+    errors: list[str] = []
+    for rel, local_path, is_dir in specs:
+        src = f"{remote_host}/{rel}"
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        dest_arg = str(local_path) + ("/" if is_dir else "")
+        cmd = ["rsync", "-az", "--partial", src, dest_arg]
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if result.returncode != 0 and "No such file" not in (result.stderr or ""):
+            errors.append(f"{rel}: {result.stderr.strip() or 'rsync failed'}")
+    if errors and not (dest / "reports" / "ho.report").is_file():
+        raise RemoteError("; ".join(errors))
+    return dest
 
 
-def sync_all_runs(config: UIConfig) -> dict[str, str]:
+def sync_run_folder(config: UIConfig, folder: str) -> tuple[Path, datetime]:
+    """Legacy sync by folder name under blast_root."""
+    path = f"{config.blast_root.rstrip('/')}/{folder}"
+    dest = sync_run_at_path(config, path)
+    return dest, datetime.now(timezone.utc)
+
+
+def sbatch_submit_at_path(config: UIConfig, run_folder_path: str) -> str:
+    script_name = Path(config.slurm_script).name
+    remote = f"cd '{run_folder_path.rstrip('/')}' && sbatch {script_name}"
+    return ssh_exec(config, remote, timeout=30)
+
+
+def sbatch_dry_run_at_path(config: UIConfig, run_folder_path: str) -> str:
+    script_name = Path(config.slurm_script).name
+    return (
+        f"ssh {config.ssh_host} "
+        f"\"cd '{run_folder_path.rstrip('/')}' && sbatch {script_name}\""
+    )
+
+
+def sync_all_runs(config: UIConfig, run_paths: list[str] | None = None) -> dict[str, str]:
+    from blast_lib.user_session import run_folder_name
+
+    paths = run_paths or [
+        f"{config.blast_root.rstrip('/')}/{folder}" for folder in config.run_folders
+    ]
     results: dict[str, str] = {}
-    for folder in config.run_folders:
+    for path in paths:
+        label = run_folder_name(path)
         try:
-            sync_run_folder(config, folder)
-            results[folder] = "ok"
+            sync_run_at_path(config, path)
+            results[label] = "ok"
         except (RemoteError, subprocess.TimeoutExpired) as exc:
-            results[folder] = str(exc)
+            results[label] = str(exc)
     return results

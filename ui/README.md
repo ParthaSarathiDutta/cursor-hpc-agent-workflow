@@ -29,7 +29,20 @@ streamlit run ui/app.py
 
 Open **http://127.0.0.1:8501** in **Safari or Chrome**.
 
-> **Do not use Cursor's built-in browser** (Simple Browser / Preview). Streamlit uses WebSockets and often shows *Connection error* inside Cursor. The launcher opens Safari automatically on macOS.
+## Pages
+
+| Page | Purpose |
+|------|---------|
+| **User Inputs** | You provide training data path, Tersoff `model.json`, MCTS, run folder path — click **Connect** |
+| **Analyze** | Sync and view status, best parameters, predicted properties for connected runs |
+| **Agent Strategy** | Agent proposes reward/objective changes (not a user input) |
+| Run Overview / Detail / Compare | Diagnostics across connected runs |
+| Jobs | Slurm queue and log tail |
+| Agent Activity | Live Cursor agent status |
+
+The app **does not assume run folders**. Enter full Perlmutter paths on **User Inputs** first.
+
+> **Do not use Cursor's built-in browser** — Streamlit needs WebSockets and often fails inside Cursor.
 
 ## Troubleshooting
 
@@ -60,9 +73,10 @@ Always run from the **repo root**, not from inside `ui/`:
 ./scripts/run-dashboard.sh   # correct
 ```
 
-### No run data on Overview / Detail pages
+### No run data on Overview / Detail / Analyze pages
 
-Click **Sync from Perlmutter** in the sidebar (requires SSH). First sync can take ~30 seconds.
+1. Go to **User Inputs** and enter your Perlmutter paths, then click **Connect**.
+2. On **Analyze**, click **Sync and analyze** (or use **Sync connected runs** in the sidebar).
 
 ### Agent Activity shows "Idle"
 
