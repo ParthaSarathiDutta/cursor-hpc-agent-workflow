@@ -10,8 +10,16 @@ font = "sans serif"
 headless = true
 address = "127.0.0.1"
 port = 8501
+# Disable auto-reload — file watcher was destabilizing the local server on macOS.
+# Restart manually: ./scripts/dashboard-dev.sh restart
+runOnSave = false
+fileWatcherType = "none"
 
 [browser]
 gatherUsageStats = false
 serverAddress = "127.0.0.1"
 serverPort = 8501
+
+[client]
+# Hides developer toolbar; reduces accidental "c" = clear cache / "r" = rerun
+toolbarMode = "viewer"

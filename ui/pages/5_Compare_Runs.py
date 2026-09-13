@@ -1,4 +1,4 @@
-"""Side-by-side comparison of user-connected runs."""
+"""Compare best sets across run folders."""
 
 from __future__ import annotations
 
@@ -12,61 +12,33 @@ import pandas as pd
 import streamlit as st
 
 from blast_lib.config import load_config
-from blast_lib.metrics import summarize_run, top_k_trials
-from blast_lib.parser import parse_ho_report
-from blast_lib.user_session import cached_report_path, connected_run_paths, get_session, run_folder_name
+from blast_lib.run_catalog import load_catalog
+from blast_lib.user_session import get_session
 
 config = load_config()
 session = get_session()
-run_paths = connected_run_paths(session)
 
 st.title("Compare Runs")
+st.caption("Best set per folder — ranked by how far the best set progressed")
 
-if not run_paths:
-    st.warning("No runs connected. Go to **User Inputs** first.")
+entries = load_catalog(config, session)
+if not entries:
+    st.warning("No folders on **Run Dashboard**.")
     st.stop()
 
+stage_rank = {"complete": 6, "elastic": 5, "phonon": 4, "eos": 3, "ce": 2, "lattice": 1, "none": 0, "unknown": 0}
+entries_sorted = sorted(entries, key=lambda e: stage_rank.get(e.best_stage, 0), reverse=True)
+
 rows = []
-for run_path in run_paths:
-    name = run_folder_name(run_path)
-    rp = cached_report_path(config, run_path)
-    exists = rp.is_file()
-    trials = parse_ho_report(rp) if exists else []
-    s = summarize_run(name, trials, report_exists=exists)
+for e in entries_sorted:
     rows.append(
         {
-            "Run": name,
-            "Path": run_path,
-            "Report": "yes" if exists else "no",
-            "Trials": s.trial_count,
-            "Best finalObj": s.best_score,
-            "Deepest stage": s.deepest_stage,
-            "Below 999k": s.below_penalty_count,
+            "Folder": e.name,
+            "Strategy": e.strategy[:50] + ("..." if len(e.strategy) > 50 else ""),
+            "Best set stage": e.best_stage,
+            "Best set outcome": (e.best.failure_reason or "—")[:60],
+            "Report": "yes" if e.report_exists else "no",
         }
     )
 
 st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-st.subheader("Best trial per run")
-best_rows = []
-for run_path in run_paths:
-    name = run_folder_name(run_path)
-    rp = cached_report_path(config, run_path)
-    if not rp.is_file():
-        continue
-    trials = parse_ho_report(rp)
-    top = top_k_trials(trials, k=1)
-    if top:
-        best_rows.append(
-            {
-                "Run": name,
-                "Score": top[0]["score"],
-                "Stage": top[0]["stage"],
-                "Reason": top[0]["reason"][:120],
-            }
-        )
-
-if best_rows:
-    st.dataframe(pd.DataFrame(best_rows), use_container_width=True, hide_index=True)
-else:
-    st.info("Sync run data on **Analyze** to compare best trials.")

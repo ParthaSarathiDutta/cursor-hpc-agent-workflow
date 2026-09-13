@@ -16,7 +16,7 @@ from blast_lib.remote import squeue_me, tail_log
 config = load_config()
 
 st.title("Slurm Jobs")
-st.caption(f"Monitor queue and logs on {config.ssh_host} — submit from **User Inputs**")
+st.caption(f"Monitor queue — submit from **Submit Next Job**")
 
 st.subheader("Your queue")
 st.code(squeue_me(config), language="bash")

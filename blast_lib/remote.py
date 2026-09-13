@@ -83,6 +83,7 @@ def sync_run_at_path(config: UIConfig, run_folder_path: str) -> Path:
         ("reports/", dest / "reports", True),
         ("settings.json", dest / "settings.json", False),
         ("model.json", dest / "model.json", False),
+        ("main1.py", dest / "main1.py", False),
         ("mcts_restart.tersoff", dest / "mcts_restart.tersoff", False),
     ]
     errors: list[str] = []

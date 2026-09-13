@@ -1,4 +1,4 @@
-"""BLAST Run Dashboard — local Streamlit app."""
+"""BLAST Run Dashboard — human-in-the-loop."""
 
 from __future__ import annotations
 
@@ -9,11 +9,17 @@ ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from blast_lib.env import load_repo_dotenv  # noqa: E402
+
+load_repo_dotenv()
+
 import streamlit as st
 
 from blast_lib.config import load_config
+from blast_lib.gemini_client import llm_available
 from blast_lib.remote import ssh_ping, sync_all_runs
-from blast_lib.user_session import connected_run_paths, get_session
+from blast_lib.run_catalog import list_catalog_paths
+from blast_lib.user_session import get_session
 
 st.set_page_config(
     page_title="BLAST Dashboard",
@@ -44,7 +50,7 @@ def _ssh_status(host: str) -> tuple[bool, str]:
 
 with st.sidebar:
     st.title("BLAST Dashboard")
-    st.caption("Local UI · Perlmutter via SSH")
+    st.caption("Human-in-the-loop · Perlmutter via SSH")
 
     ok, msg = _ssh_status(config.ssh_host)
     if st.button("Recheck SSH", use_container_width=True):
@@ -52,60 +58,49 @@ with st.sidebar:
         st.rerun()
 
     if ok:
-        st.success(f"Perlmutter SSH: connected ({config.ssh_host})")
+        st.success(f"SSH: {config.ssh_host}")
     else:
-        st.error(f"Perlmutter SSH: failed — {msg}")
-        st.markdown("Run `./scripts/setup-sshproxy.sh` then test: `ssh perlmutter echo ok`")
+        st.error(f"SSH failed — {msg}")
+
+    if llm_available(config):
+        st.success("Gemini: ready")
+    else:
+        st.warning("Gemini: add key to .env")
+
+    st.page_link("pages/0_System_Checks.py", label="System Checks", icon="✅")
 
     session = get_session()
-    run_paths = connected_run_paths(session)
+    paths = list_catalog_paths(config, session)
 
     st.divider()
-    if not run_paths:
-        st.caption("Connect runs on **User Inputs** to enable sync.")
-    elif st.button("Sync connected runs", use_container_width=True, disabled=not ok):
-        with st.spinner("Rsync run reports (may take ~30s)..."):
-            results = sync_all_runs(config, run_paths)
+    if paths and st.button("Sync all folders", use_container_width=True, disabled=not ok):
+        with st.spinner("Syncing..."):
+            results = sync_all_runs(config, paths)
         for label, status in results.items():
-            if status == "ok":
-                st.success(f"{label}: synced")
-            else:
-                st.warning(f"{label}: {status}")
-    elif not ok:
-        st.caption("Sync disabled until SSH works.")
+            st.write(f"**{label}:** {status}")
+    elif not paths:
+        st.caption("Set `run_folders` in config/ui.yaml")
 
     st.divider()
-    st.markdown("**Paths**")
-    st.code(
-        f"SSH:  {config.ssh_host}\n"
-        f"Cache: {config.local_cache_path}\n"
-        f"Remote default: {config.blast_root}",
-        language=None,
-    )
+    st.code(f"Cache: {config.local_cache_path}\nRoot: {config.blast_root}", language=None)
 
 st.title("Welcome")
 st.markdown(
     """
     | Step | Page |
     |------|------|
-    | **1. User inputs** | **User Inputs** — training data path, Tersoff model (`model.json`), MCTS, run folder path |
-    | **2. Analyze** | **Analyze** — sync and view status, best parameters, predicted properties |
-    | **3. Agent** | **Agent Strategy** — reward / objective design (not a user input) |
-    | **Monitor** | Overview, Run Detail, Compare, Jobs, Agent Activity |
+    | **1. View runs** | **Run Dashboard** — each folder, strategy, best set, performance |
+    | **2. Discuss** | **Agent Chat** — ask questions; agent uses synced run context |
+    | **3. Act** | **Submit Next Job** — you instruct changes; confirm sbatch |
+    | **Deep dive** | Run Detail, Compare, Jobs, Agent Activity |
     """
 )
-st.info(
-    "You provide every path — the app does not assume run folders. "
-    "Start on **User Inputs**, click **Connect**, then go to **Analyze**."
-)
-st.warning(
-    "Use **Safari or Chrome** at http://127.0.0.1:8501 — Cursor's built-in browser "
-    "often shows *Connection error* with Streamlit."
-)
+st.info("Open **Run Dashboard** first. Sync folders from Perlmutter, then chat or submit the next job.")
+st.warning("Use **Safari or Chrome** at http://127.0.0.1:8501 — not Cursor's built-in browser.")
 
 with st.expander("Quick start"):
-    st.code("./scripts/run-dashboard.sh", language="bash")
-    st.markdown(
-        "If the browser shows *Connection refused*, the dashboard is not running — "
-        "start it with the command above, then open **http://localhost:8501**."
+    st.code(
+        "./scripts/install-dashboard-agent.sh   # one-time persistent hosting\n"
+        "./scripts/check-dashboard.sh           # verify",
+        language="bash",
     )

@@ -4,7 +4,14 @@ local_cache: ~/blast-runs-cache
 gpu_account: YOUR_GPU_ACCOUNT_g
 slurm_script: slurm/blast_train.slurm
 trial_target: 1000
-# Legacy fallback only — the UI uses paths you enter on User Inputs.
-run_folders: []
+run_folders:
+  - ML-Tersoff-1_PE
+  - ML-Tersoff-1_PE_12
+  - ML-Tersoff-1_PE_hybrid
+# Optional: notify_email: you@example.com  (email findings — scaffold)
+dashboard_url: http://127.0.0.1:8501
+# google_api_key: YOUR_KEY   # optional — prefer repo-root .env (auto-loaded at startup)
+gemini_model: gemini-3.6-flash   # or GEMINI_MODEL in .env. Fallbacks: gemini-3.1-flash-lite, gemini-2.0-flash
+chat_context_top_k: 5   # top N trials per folder sent to Agent Chat (increase for "top 10" questions)
 status_board_path: .cursor/status/board.json
 plans_dir: .cursor/plans

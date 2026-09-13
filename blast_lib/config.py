@@ -2,50 +2,20 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
-REPO_ROOT = Path(__file__).resolve().parent.parent
+from blast_lib.config_types import REPO_ROOT, UIConfig  # noqa: F401 — re-exported
+from blast_lib.env import load_repo_dotenv
+
 DEFAULT_CONFIG_PATH = REPO_ROOT / "config" / "ui.yaml"
 
-
-@dataclass
-class UIConfig:
-    ssh_host: str = "perlmutter"
-    blast_root: str = "/global/cfs/cdirs/m4597/partha/AgenticBLAST"
-    local_cache: str = "~/blast-runs-cache"
-    gpu_account: str = "YOUR_GPU_ACCOUNT_g"
-    slurm_script: str = "slurm/blast_train.slurm"
-    run_folders: list[str] = field(
-        default_factory=lambda: [
-            "ML-Tersoff-1_PE",
-            "ML-Tersoff-1_PE_12",
-            "ML-Tersoff-1_PE_hybrid",
-        ]
-    )
-    trial_target: int = 1000
-    status_board_path: str = ".cursor/status/board.json"
-    plans_dir: str = ".cursor/plans"
-
-    @property
-    def local_cache_path(self) -> Path:
-        return Path(self.local_cache).expanduser().resolve()
-
-    @property
-    def status_board(self) -> Path:
-        return (REPO_ROOT / self.status_board_path).resolve()
-
-    @property
-    def plans_path(self) -> Path:
-        candidate = REPO_ROOT / self.plans_dir
-        if candidate.is_dir():
-            return candidate
-        return Path.home() / ".cursor" / "plans"
+__all__ = ["REPO_ROOT", "UIConfig", "DEFAULT_CONFIG_PATH", "load_config", "run_dir", "report_path"]
 
 
 def load_config(path: Path | None = None) -> UIConfig:
+    load_repo_dotenv()
     config_path = path or DEFAULT_CONFIG_PATH
     if not config_path.is_file():
         example = REPO_ROOT / "config" / "ui.yaml.example"

@@ -85,6 +85,9 @@ polymorphs_ce = list(all_polymorphs[i] for i in [0, 1])
 - `input` line = trial parameter vector  
 - `# … | finalObj | …` = final score + reason (which stage failed)  
 - Best trial = minimum `finalObj`  
+- Each property block in stage lines has `return {...}` metrics (e.g. eos `shape.obj`/`shift.obj`; phonon `ceil.maxAE%`/`ceil.MAE%`) and `checkpoint` pass/fail rules — parsed by `blast_lib/trial_details.py` for dashboard/Agent Chat  
+- Each trial's **`input` line** in ho.report carries the Tersoff parameter vector (e.g. `Sb-Sb: r0 r1 E1 ...`) — included in Agent Chat context  
+- Dashboard **Agent Chat** is agentic: Gemini calls `blast_lib/agent_tools.py` to read ho.report and main1.py on demand (not a static context blob)
 - Parse/plot: `scripts/analysis_ho_report.py` or `scripts/analysis.ipynb`
 - **Most trials fail (penalty ~1e6) — expected.** Only analyze the **top few** lowest scores and `mcts_restart.tersoff`; see [`strategy/strategy.md`](../strategy/strategy.md).
 

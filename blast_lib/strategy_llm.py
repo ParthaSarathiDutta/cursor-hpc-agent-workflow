@@ -2,17 +2,17 @@
 
 from __future__ import annotations
 
-import os
+from blast_lib.config import load_config
+from blast_lib.gemini_client import gemini_api_key, gemini_model, llm_available
 
-
-def llm_available() -> bool:
-    return bool(os.environ.get("GOOGLE_API_KEY"))
+__all__ = ["generate_llm_strategy", "llm_available"]
 
 
 def generate_llm_strategy(prompt: str) -> str:
-    api_key = os.environ.get("GOOGLE_API_KEY")
+    config = load_config()
+    api_key = gemini_api_key(config)
     if not api_key:
-        return "Set GOOGLE_API_KEY to enable LLM strategy suggestions."
+        return "Set GOOGLE_API_KEY or GEMINI_API_KEY to enable LLM strategy suggestions."
 
     try:
         import google.generativeai as genai
@@ -20,6 +20,6 @@ def generate_llm_strategy(prompt: str) -> str:
         return "Install google-generativeai: pip install google-generativeai"
 
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel(gemini_model(config))
     response = model.generate_content(prompt)
     return response.text or "(No response)"

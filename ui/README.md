@@ -1,94 +1,63 @@
 # BLAST Dashboard (local UI)
 
-Streamlit dashboard for agent activity, BLAST run analysis, Slurm jobs, and strategy suggestions.
+Human-in-the-loop dashboard: view run folders and best sets, chat with the agent, submit the next job.
 
-## Setup (one time)
+## Setup
 
 ```bash
 cd /path/to/cursor-hpc-agent-workflow
-python3 -m venv .venv
-source .venv/bin/activate
+python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements-ui.txt
-cp config/ui.yaml.example config/ui.yaml   # edit paths/account if needed
+pip install google-generativeai   # optional — for Agent Chat
+export GOOGLE_API_KEY=...         # optional — for Agent Chat
+# GEMINI_MODEL=gemini-3.1-flash-lite   # optional — default; or gemini-3.6-flash, gemini-3.1-pro-preview
+cp config/ui.yaml.example config/ui.yaml
 ```
 
 ## Run
 
-**Recommended** — use the launcher (sets PYTHONPATH and venv automatically):
+**Dev mode (recommended)** — start once, stays running, auto-reloads on save:
+
+```bash
+./scripts/dashboard-dev.sh start    # background — no terminal needed after this
+./scripts/dashboard-dev.sh status
+./scripts/dashboard-dev.sh open     # open browser
+./scripts/dashboard-dev.sh stop     # when done for the day
+```
+
+In **Cursor**: Command Palette → **Tasks: Run Task** → **Dashboard: Start (background)**.
+
+Then open the app from Cursor's **Ports** panel (port 8501 → globe icon), or Safari/Chrome at http://127.0.0.1:8501.
+
+**First time / connection refused:** Command Palette → **Tasks: Run Task** → **Dashboard: Start (background)**, then reload the browser tab. The dashboard also auto-starts when you open this workspace (see `.vscode/tasks.json`).
+
+Save changes in `ui/` or `blast_lib/` — Streamlit reloads automatically (`runOnSave` in `ui/.streamlit/config.toml`). No terminal restart.
+
+**One-shot** (foreground, closes when terminal stops):
 
 ```bash
 ./scripts/run-dashboard.sh
 ```
 
-Or manually:
-
-```bash
-source .venv/bin/activate
-streamlit run ui/app.py
-```
-
-Open **http://127.0.0.1:8501** in **Safari or Chrome**.
-
 ## Pages
 
 | Page | Purpose |
 |------|---------|
-| **User Inputs** | You provide training data path, Tersoff `model.json`, MCTS, run folder path — click **Connect** |
-| **Analyze** | Sync and view status, best parameters, predicted properties for connected runs |
-| **Agent Strategy** | Agent proposes reward/objective changes (not a user input) |
-| Run Overview / Detail / Compare | Diagnostics across connected runs |
-| Jobs | Slurm queue and log tail |
-| Agent Activity | Live Cursor agent status |
+| **Run Dashboard** | All folders — strategy, best set, stage, parameters |
+| **Agent Chat** | Ask questions; agent reads synced ho.report context |
+| **Submit Next Job** | You instruct next run (bounds, polymorphs, checkpoints); confirm sbatch |
+| Run Detail / Compare | Plots and top-k trials |
+| Jobs | Slurm queue |
+| Agent Activity | Cursor agent status |
 
-The app **does not assume run folders**. Enter full Perlmutter paths on **User Inputs** first.
+## Flow
 
-> **Do not use Cursor's built-in browser** — Streamlit needs WebSockets and often fails inside Cursor.
+1. **Run Dashboard** → Sync all folders from Perlmutter  
+2. **Agent Chat** → discuss findings and next steps  
+3. **Submit Next Job** → type instructions, preview plan, sbatch after login-node edits  
+
+Configure default folders in `config/ui.yaml` under `run_folders`.
 
 ## Troubleshooting
 
-### "Connection error" or blank page inside Cursor
-
-Open **http://127.0.0.1:8501** in **Safari or Chrome** instead.
-
-### Browser says "Connection refused"
-
-The dashboard is **not running yet**. Start it with `./scripts/run-dashboard.sh` and keep that terminal open.
-
-### Sidebar shows "Perlmutter SSH: failed"
-
-The UI itself is working; SSH to NERSC is not. Fix SSH first:
-
-```bash
-./scripts/setup-sshproxy.sh
-ssh perlmutter echo ok
-```
-
-Then refresh the dashboard. Sync and Jobs pages need working SSH.
-
-### Pages show errors or blank content
-
-Always run from the **repo root**, not from inside `ui/`:
-
-```bash
-./scripts/run-dashboard.sh   # correct
-```
-
-### No run data on Overview / Detail / Analyze pages
-
-1. Go to **User Inputs** and enter your Perlmutter paths, then click **Connect**.
-2. On **Analyze**, click **Sync and analyze** (or use **Sync connected runs** in the sidebar).
-
-### Agent Activity shows "Idle"
-
-Restart Cursor so project hooks in `.cursor/hooks.json` load. Hooks write live status to `.cursor/status/board.json`.
-
-## Agent activity hooks
-
-Project hooks in `.cursor/hooks.json` write live status to `.cursor/status/board.json`.
-Restart Cursor after cloning if hooks do not load.
-
-## Sync run data manually
-
-```bash
-rsync -az perlmutter:/global/cfs/cdirs/m4597/partha/AgenticBLAST/ML-Tersoff-1_PE/reports/ ~/blast-runs-cache/ML-Tersoff-1_PE/reports/
-```
+See previous sections: SSH via `./scripts/setup-sshproxy.sh`, use external browser not Cursor preview.
