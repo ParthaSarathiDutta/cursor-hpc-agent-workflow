@@ -12,9 +12,8 @@ from blast_lib.iterative_loop.state import (
     load_state,
     save_state,
 )
-from blast_lib.iterative_loop.submit_agent import SubmitAgent
+from blast_lib.iterative_loop.submit_agent import InteractiveSubmitResult, SubmitAgent
 from blast_lib.remote import RemoteError
-from blast_lib.slurm_monitor import query_job_status
 
 
 class IterativeRunController:
@@ -34,11 +33,12 @@ class IterativeRunController:
         if state.phase in (Phase.IDLE, Phase.COMPLETED, Phase.FAILED, Phase.STOPPED):
             return state
 
+        if state.phase == Phase.RUNNING_INTERACTIVE and state.interactive_launch_started:
+            return self.fail_stale_interactive_launch(state)
+
         try:
             if state.phase == Phase.SUBMITTING:
                 state = self._tick_submitting(state)
-            elif state.phase == Phase.WAITING_FOR_JOB:
-                state = self._tick_waiting(state)
             elif state.phase == Phase.ANALYZING_BEST_SET:
                 state = self._tick_analyzing(state)
             elif state.phase == Phase.UPDATING_RANGES:
@@ -49,64 +49,33 @@ class IterativeRunController:
             state.touch(phase=Phase.FAILED, error=str(exc), status_message="SSH / remote error.")
             save_state(self.config, state)
 
-        return state
+        return load_state(self.config)
 
-    def _fail(self, state: IterativeLoopState, message: str) -> IterativeLoopState:
-        state.touch(phase=Phase.FAILED, error=message, status_message=message)
-        save_state(self.config, state)
-        return state
+    def fail_stale_interactive_launch(self, state: IterativeLoopState | None = None) -> IterativeLoopState:
+        state = state or load_state(self.config)
+        return self._fail(
+            state,
+            "Recovery required: interactive launch was in progress when the runner stopped. "
+            "Check Perlmutter (squeue --me), then reset this workflow before starting again.",
+        )
 
-    def _tick_submitting(self, state: IterativeLoopState) -> IterativeLoopState:
-        if state.active_job_id:
-            state.touch(
-                phase=Phase.WAITING_FOR_JOB,
-                status_message=f"Job {state.active_job_id} queued or running…",
-            )
-            save_state(self.config, state)
+    def finish_interactive_cycle(self, result: InteractiveSubmitResult) -> IterativeLoopState:
+        state = load_state(self.config)
+        if state.phase != Phase.RUNNING_INTERACTIVE:
             return state
 
-        folder = state.run_folder
-        try:
-            rp = sync_and_report_path(self.config, folder)
-            before = count_scored_trials(rp)
-        except (RemoteError, OSError, FileNotFoundError) as exc:
-            return self._fail(state, f"Cannot read ho.report before submit: {exc}")
-
+        alloc = result.allocation_job_id
         state.touch(
-            scored_trial_count_before=before,
-            status_message=f"Submitting cycle {state.current_cycle}/{state.total_cycles}…",
+            last_launch_returncode=result.returncode,
+            interactive_launch_started=False,
+            active_job_id=alloc,
+            slurm_state="INTERACTIVE_FINISHED" if result.returncode == 0 else f"EXIT_{result.returncode}",
+            status_message="Interactive allocation finished. Checking ho.report…",
         )
         save_state(self.config, state)
 
-        try:
-            job_id = self.submit_agent.submit(folder, state.walltime)
-        except Exception as exc:  # noqa: BLE001 — submit failures must not advance cycle
-            return self._fail(state, f"Submit failed: {exc}")
-
-        state.touch(
-            active_job_id=job_id,
-            phase=Phase.WAITING_FOR_JOB,
-            slurm_state="SUBMITTED",
-            status_message=f"Submitted job {job_id}. Waiting for completion…",
-        )
-        save_state(self.config, state)
-        return state
-
-    def _tick_waiting(self, state: IterativeLoopState) -> IterativeLoopState:
-        job_id = state.active_job_id
-        if not job_id:
-            return self._fail(state, "WAITING_FOR_JOB without active_job_id")
-
-        status = query_job_status(self.config, job_id)
-        if status.active:
-            label = status.queue_state or "RUNNING"
-            state.touch(slurm_state=label, status_message=f"Job {job_id} — {label}…")
-            save_state(self.config, state)
-            return state
-
-        sacct = status.sacct_state or "NOT_IN_QUEUE"
-        state.touch(slurm_state=sacct, status_message=f"Job {job_id} finished ({sacct}). Checking ho.report…")
-        save_state(self.config, state)
+        if state.stop_requested:
+            return self._stop_after_allocation(state)
 
         before = state.scored_trial_count_before
         if before is None:
@@ -116,19 +85,78 @@ class IterativeRunController:
             rp = sync_and_report_path(self.config, state.run_folder)
             after = count_scored_trials(rp)
         except (RemoteError, OSError, FileNotFoundError) as exc:
-            return self._fail(state, f"Post-job sync failed: {exc}")
+            return self._fail(state, f"Post-allocation sync failed: {exc}")
 
         state.touch(scored_trial_count_after=after)
         if after <= before:
             return self._fail(
                 state,
-                f"No new scored trials after job {job_id} "
+                f"No new scored trials after interactive run "
                 f"(before={before}, after={after}). Range update skipped.",
             )
 
         state.touch(
             phase=Phase.ANALYZING_BEST_SET,
-            status_message="Job finished. Finding best set…",
+            status_message="Finding best set…",
+        )
+        save_state(self.config, state)
+        return self._advance_through_range_and_maybe_next()
+
+    def _advance_through_range_and_maybe_next(self) -> IterativeLoopState:
+        """Run analyzing + range ticks until waiting on runner or terminal."""
+        for _ in range(8):
+            state = load_state(self.config)
+            if state.phase == Phase.ANALYZING_BEST_SET:
+                self._tick_analyzing(state)
+            elif state.phase == Phase.UPDATING_RANGES:
+                self._tick_updating_ranges(state)
+            elif state.phase == Phase.STARTING_NEXT_CYCLE:
+                self._tick_next_cycle(state)
+            elif state.phase in (Phase.COMPLETED, Phase.FAILED, Phase.STOPPED, Phase.SUBMITTING):
+                break
+            else:
+                break
+        return load_state(self.config)
+
+    def _fail(self, state: IterativeLoopState, message: str) -> IterativeLoopState:
+        state.touch(phase=Phase.FAILED, error=message, status_message=message, interactive_launch_started=False)
+        save_state(self.config, state)
+        return state
+
+    def _stop_after_allocation(self, state: IterativeLoopState) -> IterativeLoopState:
+        state.touch(
+            phase=Phase.STOPPED,
+            interactive_launch_started=False,
+            status_message="Stopped after current interactive allocation (stop was requested).",
+            error=None,
+        )
+        save_state(self.config, state)
+        return state
+
+    def _tick_submitting(self, state: IterativeLoopState) -> IterativeLoopState:
+        if state.stop_requested:
+            state.touch(phase=Phase.STOPPED, status_message="Stopped — will not start a new cycle.")
+            save_state(self.config, state)
+            return state
+
+        folder = state.run_folder
+        try:
+            rp = sync_and_report_path(self.config, folder)
+            before = count_scored_trials(rp)
+        except (RemoteError, OSError, FileNotFoundError) as exc:
+            return self._fail(state, f"Cannot read ho.report before launch: {exc}")
+
+        try:
+            self.submit_agent.prepare_input(folder)
+        except Exception as exc:  # noqa: BLE001
+            return self._fail(state, f"Could not write input.txt: {exc}")
+
+        state.touch(
+            scored_trial_count_before=before,
+            phase=Phase.RUNNING_INTERACTIVE,
+            interactive_launch_started=False,
+            active_job_id=None,
+            status_message=f"Cycle {state.current_cycle}/{state.total_cycles}: requesting interactive GPUs…",
         )
         save_state(self.config, state)
         return state
@@ -155,6 +183,15 @@ class IterativeRunController:
         )
         save_state(self.config, state)
 
+        if state.stop_requested:
+            state.touch(
+                phase=Phase.STOPPED,
+                last_completed_cycle=state.current_cycle,
+                status_message="Stopped after completing this cycle (stop was requested).",
+            )
+            save_state(self.config, state)
+            return state
+
         if state.current_cycle >= state.total_cycles:
             state.touch(
                 phase=Phase.COMPLETED,
@@ -170,6 +207,11 @@ class IterativeRunController:
         return state
 
     def _tick_next_cycle(self, state: IterativeLoopState) -> IterativeLoopState:
+        if state.stop_requested:
+            state.touch(phase=Phase.STOPPED, status_message="Stopped — will not start another cycle.")
+            save_state(self.config, state)
+            return state
+
         next_cycle = state.current_cycle + 1
         state.touch(
             last_completed_cycle=state.current_cycle,
@@ -177,6 +219,7 @@ class IterativeRunController:
             active_job_id=None,
             scored_trial_count_before=None,
             scored_trial_count_after=None,
+            interactive_launch_started=False,
             phase=Phase.SUBMITTING,
             status_message=f"Starting cycle {next_cycle}/{state.total_cycles}…",
         )

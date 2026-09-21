@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
@@ -15,7 +15,8 @@ from blast_lib.config_types import REPO_ROOT, UIConfig
 class Phase(StrEnum):
     IDLE = "IDLE"
     SUBMITTING = "SUBMITTING"
-    WAITING_FOR_JOB = "WAITING_FOR_JOB"
+    RUNNING_INTERACTIVE = "RUNNING_INTERACTIVE"
+    WAITING_FOR_JOB = "WAITING_FOR_JOB"  # legacy; unused in interactive loop
     ANALYZING_BEST_SET = "ANALYZING_BEST_SET"
     UPDATING_RANGES = "UPDATING_RANGES"
     STARTING_NEXT_CYCLE = "STARTING_NEXT_CYCLE"
@@ -29,7 +30,7 @@ TERMINAL_PHASES = frozenset({Phase.IDLE, Phase.COMPLETED, Phase.FAILED, Phase.ST
 ACTIVE_PHASES = frozenset(
     {
         Phase.SUBMITTING,
-        Phase.WAITING_FOR_JOB,
+        Phase.RUNNING_INTERACTIVE,
         Phase.ANALYZING_BEST_SET,
         Phase.UPDATING_RANGES,
         Phase.STARTING_NEXT_CYCLE,
@@ -56,6 +57,9 @@ class IterativeLoopState:
     status_message: str = ""
     updated_at: str = ""
     workflow_id: str = ""
+    interactive_launch_started: bool = False
+    last_launch_returncode: int | None = None
+    stop_requested: bool = False
 
     def remaining_cycles(self) -> int:
         if self.total_cycles <= 0:
@@ -114,8 +118,10 @@ def begin_workflow(
         active_job_id=None,
         last_completed_cycle=0,
         error=None,
-        status_message="Submitting job…",
+        status_message="Preparing interactive launch…",
         workflow_id=str(uuid.uuid4()),
+        interactive_launch_started=False,
+        stop_requested=False,
     )
     state.touch()
     save_state(config, state)
@@ -123,11 +129,34 @@ def begin_workflow(
 
 
 def request_stop(config: UIConfig) -> IterativeLoopState:
+    from blast_lib.remote import RemoteError, ssh_exec
+
     state = load_state(config)
+    if state.phase == Phase.RUNNING_INTERACTIVE:
+        state.stop_requested = True
+        cancel_msg = ""
+        if state.active_job_id:
+            try:
+                ssh_exec(config, f"scancel {state.active_job_id}", timeout=20)
+                cancel_msg = f" Sent scancel {state.active_job_id}."
+            except RemoteError:
+                cancel_msg = f" Could not scancel {state.active_job_id} (allocation may still run)."
+        if state.interactive_launch_started:
+            state.status_message = (
+                "Stop requested — will not start another cycle."
+                + cancel_msg
+                + " Current interactive SSH session runs until the allocation ends."
+            )
+        else:
+            state.phase = Phase.STOPPED
+            state.status_message = "Stopped before interactive launch started."
+        save_state(config, state)
+        return state
+
     if state.phase in ACTIVE_PHASES:
-        state.touch(phase=Phase.STOPPED, status_message="Stopped by user.", error=None)
+        state.touch(phase=Phase.STOPPED, status_message="Stopped by user.", error=None, stop_requested=True)
     else:
-        state.touch(phase=Phase.STOPPED, status_message="Stopped.")
+        state.touch(phase=Phase.STOPPED, status_message="Stopped.", stop_requested=True)
     save_state(config, state)
     return state
 

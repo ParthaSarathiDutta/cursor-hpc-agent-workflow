@@ -1,4 +1,4 @@
-"""Autonomous iterative fitting — single folder, batch sbatch cycles."""
+"""Autonomous iterative fitting — single folder, interactive salloc cycles."""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ RUNNER_SCRIPT = ROOT / "scripts" / "iterative-loop-dev.sh"
 
 config = load_config()
 st.title("Autonomous Iterative Fitting")
-st.caption("Single run folder · batch sbatch · changemodel.json.py between cycles")
+st.caption("Single run folder · interactive salloc + RunBOP · changemodel.json.py between cycles")
 
 ssh_ok, ssh_msg = ssh_ping(config, timeout=15)
 if not ssh_ok:
@@ -32,8 +32,8 @@ state = load_state(config)
 active = is_workflow_active(state)
 
 PHASE_LABELS = {
-    Phase.SUBMITTING: "Submitting job…",
-    Phase.WAITING_FOR_JOB: "Waiting for Slurm job…",
+    Phase.SUBMITTING: "Preparing input.txt…",
+    Phase.RUNNING_INTERACTIVE: "Interactive salloc + RunBOP running…",
     Phase.ANALYZING_BEST_SET: "Finding best set…",
     Phase.UPDATING_RANGES: "Updating parameter ranges…",
     Phase.STARTING_NEXT_CYCLE: "Starting next cycle…",
@@ -57,7 +57,7 @@ with col_a:
         IterativeRunController(config).tick()
         st.rerun()
 with col_b:
-    st.caption(f"Runner: `{RUNNER_SCRIPT.name} start` keeps the loop alive when this tab is closed.")
+    st.caption(f"Runner `{RUNNER_SCRIPT.name} start` keeps the loop alive when this tab is closed.")
 
 st.divider()
 st.subheader("Status")
@@ -81,10 +81,17 @@ with c3:
 st.write("**Current phase:**", PHASE_LABELS.get(state.phase, state.phase))
 if state.status_message:
     st.info(state.status_message)
+if state.stop_requested:
+    st.warning(
+        "Stop requested — no further cycles will start. "
+        "If an interactive allocation is still running, it finishes unless scancel succeeded."
+    )
 if state.active_job_id:
-    st.write(f"**Job ID:** `{state.active_job_id}`")
+    st.write(f"**Allocation / job ID:** `{state.active_job_id}`")
 if state.slurm_state:
     st.write(f"**Slurm state:** {state.slurm_state}")
+if state.last_launch_returncode is not None:
+    st.write(f"**Last interactive SSH exit code:** {state.last_launch_returncode}")
 if state.last_completed_cycle:
     st.write(f"**Last completed cycle:** {state.last_completed_cycle}")
 if state.last_best_score is not None:
@@ -101,8 +108,11 @@ if state.scored_trial_count_before is not None:
 if state.error:
     st.error(state.error)
 
-if state.phase == Phase.WAITING_FOR_JOB and state.active_job_id:
-    st.caption("When this job finishes and ho.report gains new trials, RangeAgent updates ranges.")
+if state.phase == Phase.RUNNING_INTERACTIVE:
+    st.caption(
+        "Runner holds SSH for this allocation. When it ends and ho.report gains new trials, "
+        "RangeAgent updates ranges."
+    )
 
 st.divider()
 st.subheader("Start workflow")

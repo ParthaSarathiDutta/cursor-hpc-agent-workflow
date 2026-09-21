@@ -225,6 +225,28 @@ def run_interactive_launch_stream(
     )
 
 
+_SALLOC_JOB_RE = re.compile(r"Granted job allocation (\d+)", re.I)
+
+
+def parse_salloc_job_id(log: str) -> str | None:
+    match = _SALLOC_JOB_RE.search(log or "")
+    return match.group(1) if match else None
+
+
+def run_interactive_cycle(
+    config: UIConfig,
+    *,
+    folder_paths: list[str],
+    salloc_time: str,
+    step_b: str | None = None,
+    **salloc_kwargs: object,
+) -> SSHStreamResult:
+    """Write input.txt, then blocking salloc + Step B (same as Submit Next Job interactive)."""
+    write_input_txt(config, folder_paths)
+    step = step_b if step_b is not None else format_parallel_command(config)
+    return run_interactive_launch(config, step, salloc_time=salloc_time, **salloc_kwargs)  # type: ignore[arg-type]
+
+
 def run_interactive_launch(
     config: UIConfig,
     step_b: str,
@@ -265,7 +287,7 @@ def deploy_batch_slurm_script(config: UIConfig, *, batch_time: str | None = None
     """Write rendered sbatch script to blast_root on Perlmutter."""
     content = render_batch_slurm_content(config, batch_time=batch_time)
     ssh_write_file(config, config.batch_slurm_remote_path, content)
-    ssh_exec(config, f"chmod +x {shlex.quote(config.batch_slurm_remote_path)}", timeout=15)
+    ssh_exec(config, f"chmod +x {shlex.quote(config.batch_slurm_remote_path)}", timeout=60)
     return content
 
 
