@@ -20,3 +20,4 @@ ui/__pycache__/
 blast_lib/__pycache__/
 .venv/
 **/__pycache__/
+.cursor/iterative_loop/*.log
