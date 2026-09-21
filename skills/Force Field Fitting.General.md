@@ -111,6 +111,7 @@ polymorphs_ce = list(all_polymorphs[i] for i in [0, 1])
    - **Dashboard Create Run Folder:** rsync **template** folder → patch `main1.py` (lattice/ce maxAE%; eos `shape.obj`/`shift.obj`; phonon `ceil.maxAE%`; elastic MAE%), seed restart from optional **source** folder (see `docs/run-folder-setup.md`)  
 5. Analyze `reports/ho.report`  
 6. Optional: `startmodel.py` / `changemodel.json.py` to tighten bounds; restart from `mcts_restart.*`
+- **Autonomous iterative loop (dashboard):** single folder, repeated batch `sbatch` with user walltime; after each job, require **new scored trials** in `ho.report`, then remote **`changemodel.json.py`** (±10%, sign-aware) + update **`mcts_restart.tersoff`** (`Sb Sb Sb 1` prefix); headless `./scripts/iterative-loop-dev.sh start` — see `docs/autonomous-iterative-loop.md`
 
 ---
 

@@ -240,7 +240,7 @@ def run_interactive_launch(
     )
 
 
-def render_batch_slurm_content(config: UIConfig) -> str:
+def render_batch_slurm_content(config: UIConfig, *, batch_time: str | None = None) -> str:
     template_path = REPO_ROOT / config.batch_slurm_script
     if not template_path.is_file():
         raise SubmitPathError(f"Missing batch template: {template_path}")
@@ -248,7 +248,7 @@ def render_batch_slurm_content(config: UIConfig) -> str:
     replacements = {
         "{{SUBMIT_ACCOUNT}}": config.submit_account,
         "{{BATCH_QOS}}": config.batch_qos,
-        "{{BATCH_TIME}}": config.batch_time,
+        "{{BATCH_TIME}}": batch_time if batch_time is not None else config.batch_time,
         "{{BATCH_NODES}}": str(config.batch_nodes),
         "{{BATCH_NTASKS_PER_NODE}}": str(config.batch_ntasks_per_node),
         "{{BATCH_GPUS_PER_TASK}}": str(config.batch_gpus_per_task),
@@ -261,9 +261,9 @@ def render_batch_slurm_content(config: UIConfig) -> str:
     return text
 
 
-def deploy_batch_slurm_script(config: UIConfig) -> str:
+def deploy_batch_slurm_script(config: UIConfig, *, batch_time: str | None = None) -> str:
     """Write rendered sbatch script to blast_root on Perlmutter."""
-    content = render_batch_slurm_content(config)
+    content = render_batch_slurm_content(config, batch_time=batch_time)
     ssh_write_file(config, config.batch_slurm_remote_path, content)
     ssh_exec(config, f"chmod +x {shlex.quote(config.batch_slurm_remote_path)}", timeout=15)
     return content
@@ -281,10 +281,18 @@ class BatchSubmitResult:
     raw_output: str
 
 
-def run_batch_submit(config: UIConfig, *, deploy_script: bool = True) -> BatchSubmitResult:
+def run_batch_submit(
+    config: UIConfig,
+    *,
+    deploy_script: bool = True,
+    batch_time: str | None = None,
+    folder_paths: list[str] | None = None,
+) -> BatchSubmitResult:
+    if folder_paths is not None:
+        write_input_txt(config, folder_paths)
     ensure_input_txt_on_pm(config)
     if deploy_script:
-        deploy_batch_slurm_script(config)
+        deploy_batch_slurm_script(config, batch_time=batch_time)
     out = ssh_exec(config, build_sbatch_remote_command(config), timeout=60)
     match = re.search(r"Submitted batch job (\d+)", out)
     if not match:

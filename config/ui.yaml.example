@@ -35,3 +35,6 @@ batch_ntasks_per_node: 4
 batch_gpus_per_task: 1
 batch_gpus: 8
 launch_ssh_timeout_sec: 14400
+# Autonomous iterative loop (see docs/autonomous-iterative-loop.md)
+iterative_loop_state_path: .cursor/status/iterative_loop.json
+iterative_loop_poll_sec: 30

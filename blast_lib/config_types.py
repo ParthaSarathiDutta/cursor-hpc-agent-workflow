@@ -50,6 +50,8 @@ class UIConfig:
     batch_gpus_per_task: int = 1
     batch_gpus: int = 8
     launch_ssh_timeout_sec: int = 14_400
+    iterative_loop_state_path: str = ".cursor/status/iterative_loop.json"
+    iterative_loop_poll_sec: int = 30
 
     @property
     def local_cache_path(self) -> Path:
@@ -73,3 +75,7 @@ class UIConfig:
     @property
     def batch_slurm_remote_path(self) -> str:
         return f"{self.blast_root.rstrip('/')}/{self.batch_slurm_remote_name}"
+
+    @property
+    def iterative_loop_state_file(self) -> Path:
+        return (REPO_ROOT / self.iterative_loop_state_path).resolve()
