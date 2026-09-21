@@ -30,6 +30,26 @@ class UIConfig:
     trial_target: int = 1000
     status_board_path: str = ".cursor/status/board.json"
     plans_dir: str = ".cursor/plans"
+    # AgenticBLAST submit (input.txt + interactive salloc + parallel RunBOP.py)
+    input_txt_name: str = "input.txt"
+    run_dir_glob: str = "ML-Tersoff*"
+    blast_python: str = "/global/cfs/cdirs/m1917/blast_ff/bin/miniconda3/bin/python"
+    submit_account: str = "m3794"
+    salloc_nodes: int = 2
+    salloc_time: str = "00:10:00"
+    salloc_ntasks_per_node: int = 4
+    salloc_gpus_per_task: int = 1
+    salloc_gpus: int = 8
+    salloc_qos: str = "interactive"
+    batch_slurm_script: str = "slurm/agenticblast_runBOP.slurm"
+    batch_slurm_remote_name: str = "agenticblast_runBOP.slurm"
+    batch_qos: str = "regular"
+    batch_time: str = "04:00:00"
+    batch_nodes: int = 2
+    batch_ntasks_per_node: int = 4
+    batch_gpus_per_task: int = 1
+    batch_gpus: int = 8
+    launch_ssh_timeout_sec: int = 14_400
 
     @property
     def local_cache_path(self) -> Path:
@@ -45,3 +65,11 @@ class UIConfig:
         if candidate.is_dir():
             return candidate
         return Path.home() / ".cursor" / "plans"
+
+    @property
+    def input_txt_remote_path(self) -> str:
+        return f"{self.blast_root.rstrip('/')}/{self.input_txt_name}"
+
+    @property
+    def batch_slurm_remote_path(self) -> str:
+        return f"{self.blast_root.rstrip('/')}/{self.batch_slurm_remote_name}"

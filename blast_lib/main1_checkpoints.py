@@ -106,6 +106,120 @@ def load_main1_checkpoints(config: UIConfig, run_path: str) -> dict[str, list[st
     return parse_main1_checkpoints(text)
 
 
+_THRESHOLD_RE = re.compile(
+    r"((?:values\.maxAE%|maxAE%?|ceil\.maxAE%|ordering\.Norderoff==0,\s*values\.maxAE%)[^\"]*?[<>=!]+\s*)([\d.]+)"
+)
+
+
+def _replace_condition_threshold(condition: str, pct: float) -> str:
+    m = _THRESHOLD_RE.search(condition)
+    if m and float(m.group(2)) == float(pct):
+        return condition
+    return _THRESHOLD_RE.sub(rf"\g<1>{pct:g}", condition, count=1)
+
+
+_NUM_LIMIT_RE = re.compile(r"(<=\s*)([\d.]+)\s*$")
+
+
+def parse_checkpoint_limits(source: str) -> dict[str, float]:
+    """Extract absolute checkpoint limits from main1.py (eos shape/shift, phonon ceil, elastic MAE)."""
+    parsed = parse_main1_checkpoints(source)
+    out: dict[str, float] = {}
+    for cond in parsed.get("eos", []):
+        if "shape.obj" in cond:
+            m = _NUM_LIMIT_RE.search(cond.replace(" ", ""))
+            if m:
+                out["eos_shape_obj"] = float(m.group(2))
+        if "shift.obj" in cond:
+            m = _NUM_LIMIT_RE.search(cond.replace(" ", ""))
+            if m:
+                out["eos_shift_obj"] = float(m.group(2))
+    for cond in parsed.get("phonon", []):
+        if "ceil.maxAE%" in cond:
+            m = _NUM_LIMIT_RE.search(cond)
+            if m:
+                out["phonon_ceil_maxae"] = float(m.group(2))
+    for cond in parsed.get("elastic", []):
+        if "values.MAE%" in cond:
+            m = _NUM_LIMIT_RE.search(cond)
+            if m:
+                out["elastic_mae_pct"] = float(m.group(2))
+    return out
+
+
+def parse_maxae_percentages(source: str) -> dict[str, float]:
+    """maxAE% tolerances for lattice and ce from parsed checkpoint strings."""
+    parsed = parse_main1_checkpoints(source)
+    out: dict[str, float] = {}
+    for stage in ("lattice", "ce"):
+        for cond in parsed.get(stage, []):
+            if "maxAE%" not in cond:
+                continue
+            m = re.search(r"maxAE%\s*<=\s*([\d.]+)", cond.replace(" ", ""))
+            if m:
+                out[stage] = float(m.group(1))
+                break
+    return out
+
+
+def _replace_numeric_limit(condition: str, new_value: float) -> str:
+    m = _NUM_LIMIT_RE.search(condition)
+    if m and float(m.group(2)) == float(new_value):
+        return condition
+    return _NUM_LIMIT_RE.sub(rf"\g<1>{new_value:g}", condition, count=1)
+
+
+def apply_checkpoint_limits(source: str, limits: dict[str, float]) -> tuple[str, list[str]]:
+    """Update absolute checkpoint thresholds (eos shape/shift.obj, phonon ceil, elastic MAE%)."""
+    parsed = parse_main1_checkpoints(source)
+    updated = source
+    missing: list[str] = []
+    key_to_substr = {
+        "eos_shape_obj": ("eos", "shape.obj"),
+        "eos_shift_obj": ("eos", "shift.obj"),
+        "phonon_ceil_maxae": ("phonon", "ceil.maxAE%"),
+        "elastic_mae_pct": ("elastic", "values.MAE%"),
+    }
+    for key, value in limits.items():
+        stage, needle = key_to_substr.get(key, (None, None))
+        if not stage:
+            continue
+        conds = parsed.get(stage, [])
+        matched = False
+        for old_cond in conds:
+            if needle not in old_cond.replace(" ", ""):
+                continue
+            new_cond = _replace_numeric_limit(old_cond, float(value))
+            if new_cond != old_cond:
+                updated = updated.replace(old_cond, new_cond)
+            matched = True
+        if not matched:
+            missing.append(key)
+    return updated, missing
+
+
+def apply_checkpoint_percentages(source: str, pct_by_stage: dict[str, float]) -> tuple[str, list[str]]:
+    """
+    Update checkpoint condition thresholds in main1.py for given stages.
+    Returns (new_source, stages_not_found_in_file).
+    """
+    parsed = parse_main1_checkpoints(source)
+    updated = source
+    missing: list[str] = []
+    for stage, pct in pct_by_stage.items():
+        st = _normalize_stage(stage)
+        if st in ("eos",):
+            continue
+        if st not in parsed or not parsed[st]:
+            missing.append(st)
+            continue
+        for old_cond in parsed[st]:
+            new_cond = _replace_condition_threshold(old_cond, pct)
+            if new_cond != old_cond:
+                updated = updated.replace(old_cond, new_cond)
+    return updated, missing
+
+
 def format_checkpoint_config(checkpoint_config: dict[str, list[str]]) -> str:
     if not checkpoint_config:
         return "Configured checkpoints (main1.py): not available — Sync folder or check SSH."

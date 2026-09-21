@@ -45,6 +45,10 @@ with st.expander("Available tools", expanded=False):
 | `get_checkpoint_thresholds` | main1.py rules |
 | `compare_top_trials` | Top K in one folder |
 | `find_best_across_folders` | Best property metric across folders |
+| `list_blast_run_dirs` | Run dirs on Perlmutter (SSH) |
+| `read_input_txt` / `write_input_txt` | AgenticBLAST `input.txt` on Perlmutter |
+| `get_launch_commands` | Preview salloc + parallel (you run on PM) |
+| `preview_interactive_launch` | Preview one-shot dashboard SSH launch (no execute) |
 """
     )
 

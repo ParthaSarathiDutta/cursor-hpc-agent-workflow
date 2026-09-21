@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import shlex
 import subprocess
+import time
+from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -13,6 +18,104 @@ class RemoteError(RuntimeError):
     pass
 
 
+@dataclass
+class SSHStreamResult:
+    returncode: int
+    log: str
+
+
+def ssh_stream_command(
+    config: UIConfig,
+    remote_cmd: str,
+    *,
+    timeout_sec: int = 14_400,
+    allocate_tty: bool = False,
+) -> Iterator[str]:
+    """
+    Stream merged stdout/stderr from a long-running SSH command line-by-line.
+    Raises RemoteError on timeout or launch failure.
+    """
+    ssh_args = ["ssh"]
+    if allocate_tty:
+        ssh_args.append("-t")
+    ssh_args.extend([config.ssh_host, remote_cmd])
+    try:
+        proc = subprocess.Popen(
+            ssh_args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as exc:
+        raise RemoteError(f"Failed to start ssh: {exc}") from exc
+
+    assert proc.stdout is not None
+    start = time.monotonic()
+    while True:
+        if timeout_sec and (time.monotonic() - start) > timeout_sec:
+            proc.kill()
+            proc.wait(timeout=5)
+            raise RemoteError(f"SSH stream timed out after {timeout_sec}s")
+        line = proc.stdout.readline()
+        if line:
+            yield line
+            continue
+        if proc.poll() is not None:
+            break
+        time.sleep(0.05)
+
+    # Drain remainder
+    rest = proc.stdout.read()
+    if rest:
+        yield rest
+
+
+def ssh_stream_run(
+    config: UIConfig,
+    remote_cmd: str,
+    *,
+    timeout_sec: int = 14_400,
+    allocate_tty: bool = False,
+) -> SSHStreamResult:
+    """Collect full log from ssh_stream_command and return exit code."""
+    lines: list[str] = []
+    ssh_args = ["ssh"]
+    if allocate_tty:
+        ssh_args.append("-t")
+    ssh_args.extend([config.ssh_host, remote_cmd])
+    try:
+        proc = subprocess.Popen(
+            ssh_args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
+        )
+    except OSError as exc:
+        raise RemoteError(f"Failed to start ssh: {exc}") from exc
+
+    assert proc.stdout is not None
+    start = time.monotonic()
+    while True:
+        if timeout_sec and (time.monotonic() - start) > timeout_sec:
+            proc.kill()
+            proc.wait(timeout=5)
+            raise RemoteError(f"SSH stream timed out after {timeout_sec}s")
+        line = proc.stdout.readline()
+        if line:
+            lines.append(line)
+            continue
+        if proc.poll() is not None:
+            break
+        time.sleep(0.05)
+    rest = proc.stdout.read()
+    if rest:
+        lines.append(rest)
+    code = proc.wait(timeout=5)
+    return SSHStreamResult(returncode=code, log="".join(lines))
+
+
 def ssh_exec(config: UIConfig, remote_cmd: str, timeout: int = 30) -> str:
     cmd = ["ssh", config.ssh_host, remote_cmd]
     try:
@@ -20,8 +123,30 @@ def ssh_exec(config: UIConfig, remote_cmd: str, timeout: int = 30) -> str:
     except subprocess.TimeoutExpired as exc:
         raise RemoteError(f"SSH timed out after {timeout}s") from exc
     if result.returncode != 0:
-        raise RemoteError(result.stderr.strip() or result.stdout.strip() or "SSH failed")
+        err = (result.stderr or result.stdout or "").strip()
+        if not err or err == "SSH failed":
+            err = (
+                "non-zero exit from ssh (try ./scripts/setup-sshproxy.sh if >24h since login)"
+            )
+        raise RemoteError(err)
     return result.stdout
+
+
+def ssh_read_file(config: UIConfig, remote_path: str, timeout: int = 30) -> str:
+    """Read a remote file over SSH (login node)."""
+    cmd = f"cat {shlex.quote(remote_path)}"
+    return ssh_exec(config, cmd, timeout=timeout)
+
+
+def ssh_write_file(config: UIConfig, remote_path: str, content: str, timeout: int = 30) -> None:
+    """Write a remote file over SSH via base64 decode (login node)."""
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    parent = str(Path(remote_path).parent)
+    remote_cmd = (
+        f"mkdir -p {shlex.quote(parent)} && "
+        f"printf '%s' {shlex.quote(encoded)} | base64 -d > {shlex.quote(remote_path)}"
+    )
+    ssh_exec(config, remote_cmd, timeout=timeout)
 
 
 def ssh_ping(config: UIConfig, timeout: int = 10) -> tuple[bool, str]:

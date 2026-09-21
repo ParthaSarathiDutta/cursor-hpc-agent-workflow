@@ -8,7 +8,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from blast_lib.config import REPO_ROOT, UIConfig
-from blast_lib.remote import RemoteError, sbatch_dry_run_at_path, sbatch_submit_at_path
 
 
 @dataclass
@@ -46,21 +45,9 @@ def plan_summary(record: JobInstruction) -> str:
         f"- Bounds: changemodel.json.py ±{record.bound_tighten_pct:.0f}% around best trial (if tightening requested)",
         f"- Search: {'MCTS (RunBOP.py)' if record.use_mcts else 'one-shot only (not recommended for next search)'}",
         "",
-        "Manual steps on Perlmutter (login node):",
-        "1. Apply any main1.py / checkpoint / polymorph changes described above",
+        "Manual steps on Perlmutter:",
+        "1. Apply main1.py / model.json / checkpoint changes on login node if needed",
         "2. Run changemodel.json.py or startmodel.py if tightening bounds",
-        "3. sbatch from run folder",
+        "3. Dashboard **Submit Next Job** → write input.txt → salloc → parallel RunBOP.py",
     ]
     return "\n".join(lines)
-
-
-def submit_job(config: UIConfig, run_folder_path: str) -> tuple[bool, str]:
-    try:
-        out = sbatch_submit_at_path(config, run_folder_path)
-        return True, out
-    except RemoteError as exc:
-        return False, str(exc)
-
-
-def dry_run_command(config: UIConfig, run_folder_path: str) -> str:
-    return sbatch_dry_run_at_path(config, run_folder_path)

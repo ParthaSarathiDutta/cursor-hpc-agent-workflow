@@ -45,7 +45,8 @@ Save changes in `ui/` or `blast_lib/` — Streamlit reloads automatically (`runO
 |------|---------|
 | **Run Dashboard** | All folders — strategy, best set, stage, parameters |
 | **Agent Chat** | Ask questions; agent reads synced ho.report context |
-| **Submit Next Job** | You instruct next run (bounds, polymorphs, checkpoints); confirm sbatch |
+| **Create Run Folder** | Copy template on Perlmutter; checkpoints, seed, model.json (see `docs/run-folder-setup.md`) |
+| **Submit Next Job** | Write `input.txt`; launch interactive (salloc+Step B) or batch sbatch from dashboard |
 | Run Detail / Compare | Plots and top-k trials |
 | Jobs | Slurm queue |
 | Agent Activity | Cursor agent status |
@@ -54,7 +55,8 @@ Save changes in `ui/` or `blast_lib/` — Streamlit reloads automatically (`runO
 
 1. **Run Dashboard** → Sync all folders from Perlmutter  
 2. **Agent Chat** → discuss findings and next steps  
-3. **Submit Next Job** → type instructions, preview plan, sbatch after login-node edits  
+3. **Create Run Folder** (optional) → new run dir from template before submit  
+4. **Submit Next Job** → select folders, write `input.txt`, run salloc + parallel on Perlmutter (see `docs/agenticblast-submit.md`)  
 
 Configure default folders in `config/ui.yaml` under `run_folders`.
 

@@ -20,6 +20,7 @@ from blast_lib.trial_details import (
     format_trial_params,
 )
 from blast_lib.user_session import UserRunSession
+from blast_lib import agenticblast_submit as abs_submit
 
 STAGES = ("lattice", "ce", "eos", "phonon", "elastic")
 
@@ -91,7 +92,12 @@ Real files: ho.report, main1.py, model.json, mcts_restart.tersoff.
 
 {METRIC_GLOSSARY.strip()}
 
-Be concise. Cite numbers from tool results."""
+Be concise. Cite numbers from tool results.
+
+Job launch on Perlmutter uses input.txt + interactive salloc + parallel RunBOP.py.
+Use submit tools to list/write input.txt; get_launch_commands is preview-only (user runs salloc manually).
+
+Run folder setup: preview_run_folder_setup / save_run_folder_spec only — user applies on **Create Run Folder** page."""
 
     def list_run_folders(self) -> str:
         """List configured BLAST run folders with best stage and trial count."""
@@ -221,6 +227,108 @@ Be concise. Cite numbers from tool results."""
             )
         return "\n".join(lines)
 
+    def list_blast_run_dirs(self) -> str:
+        """List BLAST run directories on Perlmutter under blast_root (SSH, matches notebook glob)."""
+        try:
+            dirs = abs_submit.list_blast_run_dirs(self.config)
+        except Exception as exc:  # noqa: BLE001
+            return f"Could not list remote dirs: {exc}"
+        if not dirs:
+            return "No matching run directories on Perlmutter."
+        return "\n".join(f"- {d}" for d in dirs)
+
+    def read_input_txt(self) -> str:
+        """Read AgenticBLAST input.txt on Perlmutter (folder paths for parallel RunBOP)."""
+        try:
+            body = abs_submit.read_input_txt(self.config)
+        except Exception as exc:  # noqa: BLE001
+            return f"Could not read input.txt: {exc}"
+        path = self.config.input_txt_remote_path
+        if not body.strip():
+            return f"{path} is empty or missing."
+        return f"{path}:\n{body}"
+
+    def write_input_txt(self, folder_paths: list[str]) -> str:
+        """Write input.txt on Perlmutter login node (one absolute path per line, trailing slash)."""
+        try:
+            content = abs_submit.write_input_txt(self.config, folder_paths)
+        except Exception as exc:  # noqa: BLE001
+            return f"Write failed: {exc}"
+        return f"Wrote {self.config.input_txt_remote_path}:\n{content}"
+
+    def get_launch_commands(self) -> str:
+        """Preview salloc + parallel commands for RunBOP (user must run on Perlmutter; do not execute)."""
+        return abs_submit.launch_commands_text(self.config)
+
+    def preview_interactive_launch(self, step_b: str = "") -> str:
+        """Preview one-shot SSH command: salloc + Step B (dashboard launch; do not execute from chat)."""
+        step = step_b.strip() or abs_submit.format_parallel_command(self.config)
+        return abs_submit.preview_interactive_launch_command(self.config, step)
+
+    def preview_run_folder_setup(
+        self,
+        new_folder_name: str,
+        template_path: str,
+        checkpoint_pct_json: str = "{}",
+        seed_mode: str = "keep_template",
+        seed_from_folder: str = "",
+        bounds_mode: str = "tighten_around_restart",
+        tighten_pct: float = 10.0,
+    ) -> str:
+        """Preview rsync + seed + model.json + main1 edits for a new run folder (does not apply)."""
+        import json
+
+        from blast_lib.run_folder_setup import RunFolderSpec, preview_run_folder_setup
+
+        try:
+            pct = json.loads(checkpoint_pct_json) if checkpoint_pct_json.strip() else {}
+        except json.JSONDecodeError as exc:
+            return f"Invalid checkpoint_pct_json: {exc}"
+        spec = RunFolderSpec(
+            new_folder_name=new_folder_name.strip(),
+            template_path=template_path.strip(),
+            checkpoint_pct={k: float(v) for k, v in pct.items()},
+            seed_mode=seed_mode,  # type: ignore[arg-type]
+            seed_from_folder=seed_from_folder.strip() or None,
+            bounds_mode=bounds_mode,  # type: ignore[arg-type]
+            tighten_pct=float(tighten_pct),
+        )
+        try:
+            return preview_run_folder_setup(self.config, spec)
+        except Exception as exc:  # noqa: BLE001
+            return f"Preview failed: {exc}"
+
+    def save_run_folder_spec(
+        self,
+        new_folder_name: str,
+        template_path: str,
+        checkpoint_pct_json: str = "{}",
+        seed_mode: str = "keep_template",
+        seed_from_folder: str = "",
+        bounds_mode: str = "tighten_around_restart",
+        tighten_pct: float = 10.0,
+    ) -> str:
+        """Save run-folder spec locally for the Create Run Folder page (does not apply on Perlmutter)."""
+        import json
+
+        from blast_lib.run_folder_setup import RunFolderSpec, save_run_folder_spec as _save
+
+        try:
+            pct = json.loads(checkpoint_pct_json) if checkpoint_pct_json.strip() else {}
+        except json.JSONDecodeError as exc:
+            return f"Invalid checkpoint_pct_json: {exc}"
+        spec = RunFolderSpec(
+            new_folder_name=new_folder_name.strip(),
+            template_path=template_path.strip(),
+            checkpoint_pct={k: float(v) for k, v in pct.items()},
+            seed_mode=seed_mode,  # type: ignore[arg-type]
+            seed_from_folder=seed_from_folder.strip() or None,
+            bounds_mode=bounds_mode,  # type: ignore[arg-type]
+            tighten_pct=float(tighten_pct),
+        )
+        _save(spec)
+        return f"Saved spec for {spec.new_folder_name!r} → .cursor/status/run_folder_spec.json"
+
     def tool_functions(self) -> list:
         return [
             self.list_run_folders,
@@ -231,6 +339,13 @@ Be concise. Cite numbers from tool results."""
             self.get_property_metrics,
             self.compare_top_trials,
             self.find_best_across_folders,
+            self.list_blast_run_dirs,
+            self.read_input_txt,
+            self.write_input_txt,
+            self.get_launch_commands,
+            self.preview_interactive_launch,
+            self.preview_run_folder_setup,
+            self.save_run_folder_spec,
         ]
 
 

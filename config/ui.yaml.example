@@ -15,3 +15,23 @@ gemini_model: gemini-3.6-flash   # or GEMINI_MODEL in .env. Fallbacks: gemini-3.
 chat_context_top_k: 5   # top N trials per folder sent to Agent Chat (increase for "top 10" questions)
 status_board_path: .cursor/status/board.json
 plans_dir: .cursor/plans
+# AgenticBLAST job launch (see docs/agenticblast-submit.md)
+input_txt_name: input.txt
+run_dir_glob: ML-Tersoff*
+blast_python: /global/cfs/cdirs/m1917/blast_ff/bin/miniconda3/bin/python
+submit_account: m3794
+salloc_nodes: 2
+salloc_time: "00:10:00"
+salloc_ntasks_per_node: 4
+salloc_gpus_per_task: 1
+salloc_gpus: 8
+salloc_qos: interactive
+batch_slurm_script: slurm/agenticblast_runBOP.slurm
+batch_slurm_remote_name: agenticblast_runBOP.slurm
+batch_qos: regular
+batch_time: "04:00:00"
+batch_nodes: 2
+batch_ntasks_per_node: 4
+batch_gpus_per_task: 1
+batch_gpus: 8
+launch_ssh_timeout_sec: 14400

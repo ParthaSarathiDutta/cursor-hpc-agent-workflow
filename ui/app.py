@@ -41,26 +41,27 @@ st.markdown(
 config = load_config()
 
 
-@st.cache_data(ttl=60)
-def _ssh_status(host: str) -> tuple[bool, str]:
-    from blast_lib.config import UIConfig
-
-    return ssh_ping(UIConfig(ssh_host=host), timeout=15)
-
-
 with st.sidebar:
     st.title("BLAST Dashboard")
     st.caption("Human-in-the-loop · Perlmutter via SSH")
 
-    ok, msg = _ssh_status(config.ssh_host)
+    if "ssh_ok" not in st.session_state:
+        st.session_state.ssh_ok, st.session_state.ssh_msg = ssh_ping(config, timeout=15)
+
     if st.button("Recheck SSH", use_container_width=True):
-        _ssh_status.clear()
+        st.session_state.ssh_ok, st.session_state.ssh_msg = ssh_ping(config, timeout=15)
         st.rerun()
 
+    ok, msg = st.session_state.ssh_ok, st.session_state.ssh_msg
     if ok:
         st.success(f"SSH: {config.ssh_host}")
     else:
-        st.error(f"SSH failed — {msg}")
+        hint = (
+            "Refresh NERSC credentials: `./scripts/setup-sshproxy.sh` "
+            "(sshproxy expires ~every 24h), then click **Recheck SSH**."
+        )
+        detail = msg if msg and msg != "SSH failed" else hint
+        st.error(f"SSH failed — {detail}")
 
     if llm_available(config):
         st.success("Gemini: ready")
