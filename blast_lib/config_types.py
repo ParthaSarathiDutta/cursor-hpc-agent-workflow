@@ -13,7 +13,7 @@ class UIConfig:
     ssh_host: str = "perlmutter"
     blast_root: str = "/global/cfs/cdirs/m4597/partha/AgenticBLAST"
     local_cache: str = "~/blast-runs-cache"
-    gpu_account: str = "YOUR_GPU_ACCOUNT_g"
+    gpu_account: str = "m4597_g"
     slurm_script: str = "slurm/blast_train.slurm"
     run_folders: list[str] = field(
         default_factory=lambda: [

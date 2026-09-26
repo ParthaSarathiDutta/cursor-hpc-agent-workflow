@@ -149,6 +149,27 @@ def is_active_status(status: str) -> bool:
     return status in (WorkflowStatus.QUEUED, WorkflowStatus.RUNNING)
 
 
+def mark_workflow_orchestrator_crash(
+    path: Path,
+    exc: BaseException,
+    *,
+    respect_stopped: bool = True,
+) -> None:
+    """Set FAILED when the orchestrator dies unexpectedly (do not clobber STOPPED)."""
+    if not path.is_file():
+        return
+    wf = load_workflow(path)
+    if respect_stopped and wf.status == WorkflowStatus.STOPPED:
+        return
+    msg = str(exc).strip() or exc.__class__.__name__
+    wf.status = WorkflowStatus.FAILED
+    wf.phase = WorkflowPhase.FAILED
+    wf.error = msg
+    wf.status_message = f"Orchestrator crashed: {msg}"
+    wf.current_interactive_job_id = None
+    save_workflow(path, wf)
+
+
 def is_active_phase(phase: str) -> bool:
     return phase in (
         WorkflowPhase.QUEUED,

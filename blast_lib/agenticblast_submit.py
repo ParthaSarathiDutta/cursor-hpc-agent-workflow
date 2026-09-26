@@ -8,6 +8,13 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 
 from blast_lib.config_types import REPO_ROOT, UIConfig
+from blast_lib.iterative_loop.runbop_launch import (
+    format_env_setup_command as _format_env_setup_pure,
+)
+from blast_lib.iterative_loop.runbop_launch import (
+    format_parallel_runbop_command,
+    settings_from_ui_config,
+)
 from blast_lib.remote import (
     RemoteError,
     SSHStreamResult,
@@ -138,36 +145,13 @@ def format_salloc_command(
 
 
 def format_env_setup_command(config: UIConfig) -> str:
-    """
-    Shell snippet (run once before RunBOP.py) that fixes missing shared libs for the
-    2020-era LAMMPS build: a scoped shim dir symlinking only libcudart.so.11.0 (avoids
-    shadowing the system libstdc++ that Kokkos needs) plus the Shifter Cray-MPICH ABI dir.
-    """
-    root = _blast_root_norm(config)
-    shim_dir = f"{root}/.env_shim"
-    cudart_name = config.lammps_cudart_lib.rsplit("/", 1)[-1]
-    mpich = config.shifter_mpich_shim_dir.rstrip("/")
-    return (
-        f'SHIM="{shim_dir}"; mkdir -p "$SHIM"; '
-        f'ln -sf "{config.lammps_cudart_lib}" "$SHIM/{cudart_name}"; '
-        f'for _lib in "{mpich}"/libmpi_gnu_91.so.12 "{mpich}"/libmpi_gtl_cuda.so.0; do '
-        f'[ -e "$_lib" ] && ln -sf "$_lib" "$SHIM/$(basename "$_lib")"; done; '
-        f'export LD_LIBRARY_PATH="$SHIM:{mpich}:$LD_LIBRARY_PATH"'
-    )
+    """Shell snippet for LAMMPS CUDA/MPI shims (delegates to SSH-free runbop_launch)."""
+    return _format_env_setup_pure(settings_from_ui_config(config))
 
 
 def format_parallel_command(config: UIConfig) -> str:
     """Run RunBOP.py in each folder listed in input.txt (on compute node after salloc)."""
-    root = _blast_root_norm(config)
-    py = config.blast_python
-    env = format_env_setup_command(config)
-    # Env in each parallel task — GNU parallel may not inherit exports from parent on all nodes.
-    inner = f"{env} && cd {{}} && rm -rf tmp && {py} {{}}RunBOP.py"
-    return (
-        f"{env} && "
-        f"cd {root} && cat {config.input_txt_name} | "
-        f"parallel -j 1 {shlex.quote(inner)}"
-    )
+    return format_parallel_runbop_command(settings_from_ui_config(config))
 
 
 def get_launch_commands(config: UIConfig) -> dict[str, str]:

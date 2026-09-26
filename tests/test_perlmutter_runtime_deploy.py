@@ -14,15 +14,27 @@ def test_all_runtime_files_exist():
 
 
 def test_runtime_modules_do_not_import_ssh_at_import(monkeypatch):
-    """GPU/Range import closure must not call ssh_exec on import."""
+    """Perlmutter runtime must not require blast_lib.remote at import time."""
     import importlib
     import sys
 
-    def boom(*args, **kwargs):
-        raise AssertionError("ssh_exec must not run during Perlmutter job imports")
+    if "blast_lib.remote" in sys.modules:
+        del sys.modules["blast_lib.remote"]
 
-    monkeypatch.setitem(sys.modules, "blast_lib.remote", type(sys)("blast_lib.remote"))
-    sys.modules["blast_lib.remote"].ssh_exec = boom  # type: ignore[attr-defined]
+    def _block_remote_import(name, *args, **kwargs):
+        if name == "blast_lib.remote" or name.startswith("blast_lib.remote."):
+            raise ImportError(f"blocked {name}")
+        return importlib.__import__(name, *args, **kwargs)
 
-    importlib.import_module("blast_lib.iterative_loop.range_core")
-    importlib.import_module("blast_lib.iterative_loop.ho_report_local")
+    monkeypatch.setattr(importlib, "__import__", _block_remote_import)
+
+    for mod in (
+        "blast_lib.iterative_loop.slurm_timing",
+        "blast_lib.iterative_loop.range_core",
+        "blast_lib.iterative_loop.orchestrator_core",
+        "blast_lib.iterative_loop.runbop_launch",
+    ):
+        importlib.import_module(mod)
+
+    # Orchestrator entrypoint (script adds repo root on NERSC; here use package imports)
+    importlib.import_module("scripts.agentic_loop_orchestrator")

@@ -6,7 +6,6 @@ import re
 import subprocess
 
 from blast_lib.config_types import UIConfig
-from blast_lib.remote import RemoteError, ssh_exec
 
 # Allow sacct to report slightly less than walltime (startup/teardown).
 DEFAULT_WALLTIME_SLACK_SEC = 5
@@ -73,6 +72,8 @@ def fetch_job_elapsed_seconds_local(job_id: str) -> int | None:
 
 def fetch_job_elapsed_seconds(config: UIConfig, job_id: str) -> int | None:
     """Query Perlmutter sacct for the main job step (-X). Returns None if unavailable."""
+    from blast_lib.remote import RemoteError, ssh_exec
+
     jid = job_id.strip()
     if not jid.isdigit():
         return None
