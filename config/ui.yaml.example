@@ -1,7 +1,7 @@
 ssh_host: perlmutter
 blast_root: /global/cfs/cdirs/m4597/partha/AgenticBLAST
 local_cache: ~/blast-runs-cache
-gpu_account: YOUR_GPU_ACCOUNT_g
+gpu_account: m4597_g
 slurm_script: slurm/blast_train.slurm
 trial_target: 1000
 run_folders:
