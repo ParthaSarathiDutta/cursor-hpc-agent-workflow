@@ -1,14 +1,13 @@
 """Sequential interactive-salloc orchestrator logic (testable; runs on NERSC)."""
 
-from __future__ import annotations
+from __future__ import annotations  # Required for Optional[Callable[...]] on Perlmutter 3.8
 
 import re
 import subprocess
 import time
-from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from blast_lib.iterative_loop.ho_report_local import count_scored_trials
 from blast_lib.iterative_loop.range_core import run_range_update_local
