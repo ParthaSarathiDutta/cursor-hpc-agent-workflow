@@ -141,12 +141,13 @@ class BatchSubmitAgent:
             ssh_exec(self.config, f"chmod +x {shlex.quote(script_path)}", timeout=20)
             out = ssh_exec(self.config, f"bash {shlex.quote(script_path)}", timeout=120)
 
-            cli = f"{root}/scripts/agentic_loop_workflow_cli.py"
+            blast_root = self.config.blast_root.rstrip("/")
+            cli = f"{blast_root}/scripts/agentic_loop_workflow_cli.py"
             mark_cmd = (
                 f"{shlex.quote(self.config.blast_python)} {shlex.quote(cli)} mark-running "
                 f"{shlex.quote(folder)} {shlex.quote('Slurm chain submitted; jobs running on NERSC.')}"
             )
-            ssh_exec(self.config, f"cd {shlex.quote(root)} && {mark_cmd}", timeout=30)
+            ssh_exec(self.config, f"cd {shlex.quote(blast_root)} && {mark_cmd}", timeout=30)
 
         except RemoteError as exc:
             return BatchChainSubmitResult(ok=False, message=str(exc), workflow_id=wf_id)
