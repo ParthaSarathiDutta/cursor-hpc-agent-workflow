@@ -22,3 +22,5 @@ blast_lib/__pycache__/
 **/__pycache__/
 .cursor/iterative_loop/*.log
 .cursor/iterative_loop/runner.pid
+.cursor/iterative_loop/*.out
+.cursor/iterative_loop/*_capture.txt

@@ -73,6 +73,13 @@ def read_input_txt(config: UIConfig) -> str:
         raise
 
 
+def clear_run_folder_tmp(config: UIConfig, folder_paths: list[str]) -> None:
+    """Remove stale tmp/ under run dirs (RunBOP needs to create tmp -> /dev/shm symlink)."""
+    for folder in folder_paths:
+        path = normalize_run_path(config, folder)
+        ssh_exec(config, f"rm -rf {shlex.quote(path + '/tmp')}", timeout=60)
+
+
 def write_input_txt(config: UIConfig, folder_paths: list[str]) -> str:
     """
     Write input.txt on Perlmutter login node.
@@ -81,6 +88,7 @@ def write_input_txt(config: UIConfig, folder_paths: list[str]) -> str:
     if not folder_paths:
         raise SubmitPathError("At least one run folder path is required.")
     normalized = [normalize_run_path(config, p) for p in folder_paths]
+    clear_run_folder_tmp(config, normalized)
     content = format_input_txt_lines(normalized)
     return write_input_txt_content(config, content)
 
@@ -138,10 +146,13 @@ def format_env_setup_command(config: UIConfig) -> str:
     root = _blast_root_norm(config)
     shim_dir = f"{root}/.env_shim"
     cudart_name = config.lammps_cudart_lib.rsplit("/", 1)[-1]
+    mpich = config.shifter_mpich_shim_dir.rstrip("/")
     return (
         f'SHIM="{shim_dir}"; mkdir -p "$SHIM"; '
         f'ln -sf "{config.lammps_cudart_lib}" "$SHIM/{cudart_name}"; '
-        f'export LD_LIBRARY_PATH="$SHIM:{config.shifter_mpich_shim_dir}:$LD_LIBRARY_PATH"'
+        f'for _lib in "{mpich}"/libmpi_gnu_91.so.12 "{mpich}"/libmpi_gtl_cuda.so.0; do '
+        f'[ -e "$_lib" ] && ln -sf "$_lib" "$SHIM/$(basename "$_lib")"; done; '
+        f'export LD_LIBRARY_PATH="$SHIM:{mpich}:$LD_LIBRARY_PATH"'
     )
 
 
@@ -149,11 +160,13 @@ def format_parallel_command(config: UIConfig) -> str:
     """Run RunBOP.py in each folder listed in input.txt (on compute node after salloc)."""
     root = _blast_root_norm(config)
     py = config.blast_python
-    inner = f'cd {{}}; rm -rf tmp; {py} {{}}RunBOP.py'
+    env = format_env_setup_command(config)
+    # Env in each parallel task — GNU parallel may not inherit exports from parent on all nodes.
+    inner = f"{env} && cd {{}} && rm -rf tmp && {py} {{}}RunBOP.py"
     return (
-        f"{format_env_setup_command(config)} && "
+        f"{env} && "
         f"cd {root} && cat {config.input_txt_name} | "
-        f"parallel {shlex.quote(inner)}"
+        f"parallel -j 1 {shlex.quote(inner)}"
     )
 
 
@@ -199,7 +212,7 @@ def build_interactive_launch_command(
     gpus: int | None = None,
     account: str | None = None,
 ) -> str:
-    """Remote shell command: cd blast_root && salloc ... -- bash -lc 'step_b'."""
+    """Remote shell command: cd blast_root && salloc ... -- bash -c 'step_b'."""
     root = _blast_root_norm(config)
     salloc = format_salloc_command(
         config,
@@ -215,7 +228,7 @@ def build_interactive_launch_command(
     if not inner:
         raise SubmitPathError("Step B command is empty.")
     escaped = inner.replace("'", "'\\''")
-    return f"cd {shlex.quote(root)} && {salloc} -- bash -lc '{escaped}'"
+    return f"cd {shlex.quote(root)} && {salloc} -- bash -c '{escaped}'"
 
 
 def preview_interactive_launch_command(

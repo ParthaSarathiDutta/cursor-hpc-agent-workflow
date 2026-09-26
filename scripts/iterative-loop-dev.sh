@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Background runner for autonomous iterative BLAST loop.
-# Usage: ./scripts/iterative-loop-dev.sh {start|stop|status|once|logs}
+# Usage: ./scripts/iterative-loop-dev.sh {start|stop|status|once|chain|logs}
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -72,6 +72,18 @@ cmd_once() {
   "${PY}" -m blast_lib.iterative_loop.runner --once
 }
 
+cmd_chain() {
+  PY="$(_venv_python)"
+  LOG_FILE="${RUN_DIR}/chain.log"
+  echo "Foreground chain until workflow terminal (cycles use blocking salloc)."
+  echo "Log: ${LOG_FILE}"
+  if command -v caffeinate >/dev/null 2>&1; then
+    exec caffeinate -i "${PY}" -u -m blast_lib.iterative_loop.runner --chain >>"${LOG_FILE}" 2>&1
+  else
+    exec "${PY}" -u -m blast_lib.iterative_loop.runner --chain >>"${LOG_FILE}" 2>&1
+  fi
+}
+
 cmd_logs() {
   tail -f "${LOG_FILE}"
 }
@@ -81,9 +93,10 @@ case "${1:-status}" in
   stop) cmd_stop ;;
   status) cmd_status ;;
   once) cmd_once ;;
+  chain) cmd_chain ;;
   logs) cmd_logs ;;
   *)
-    echo "Usage: $0 {start|stop|status|once|logs}"
+    echo "Usage: $0 {start|stop|status|once|chain|logs}"
     exit 1
     ;;
 esac

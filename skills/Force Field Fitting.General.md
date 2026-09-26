@@ -113,6 +113,8 @@ polymorphs_ce = list(all_polymorphs[i] for i in [0, 1])
 6. Optional: `startmodel.py` / `changemodel.json.py` to tighten bounds; restart from `mcts_restart.*`
 - **Autonomous iterative loop (dashboard):** single folder, repeated **interactive salloc + RunBOP** (user walltime); cycle complete only if **`sacct` Elapsed ≥ walltime** (5s slack) **and** new scored trials in `ho.report`, then **`changemodel.json.py`** + **`mcts_restart.tersoff`**; `./scripts/iterative-loop-dev.sh start` — see `docs/autonomous-iterative-loop.md`
 - **Iterative loop one workflow:** set `total_cycles` + walltime once (`begin_workflow` / UI Start); keep a **long-lived** `blast_lib.iterative_loop.runner` until `COMPLETED` — short-lived shells can leave `interactive_launch_started=true` and FAIL on restart. Cycles can still advance if `ho.report` grows even when Step B exits non-zero quickly (RunBOP/`tmp`/LAMMPS); that is not the same as using the full salloc walltime.
+- **`main1.py` ramtmp + multiprocessing:** spawned workers re-import `main1` with empty `blast.runtime`; if `tmp` already exists as a symlink from the parent, `blast.cmd.ln(shm,'tmp')` raises `FileExistsError`. Fix: if `tmp_dir` is already a symlink, set `blast.runtime['ramtmp']` from its target; else remove stale `tmp` before `ln`. Script: `scripts/patch_main1_ramtmp.py` (apply on each run folder on Perlmutter).
+- **Step B MPI shims on compute:** extend `.env_shim` with symlinks to `libmpi_gnu_91.so.12` and `libmpi_gtl_cuda.so.0` under `/usr/lib/shifter/mpich-2.2` (see `format_env_setup_command`); `sacct` **TIMEOUT** with ~full walltime + new `ho.report` trials is a successful interactive cycle even if `blast.log` still shows occasional `libmpi_gnu_91` lines from worker subprocesses.
 
 ---
 

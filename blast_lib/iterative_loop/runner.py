@@ -14,7 +14,13 @@ if str(ROOT) not in sys.path:
 from blast_lib.config import load_config  # noqa: E402
 from blast_lib.env import load_repo_dotenv  # noqa: E402
 from blast_lib.iterative_loop.controller import IterativeRunController, is_workflow_active  # noqa: E402
-from blast_lib.iterative_loop.state import IterativeLoopState, Phase, load_state, save_state  # noqa: E402
+from blast_lib.iterative_loop.state import (  # noqa: E402
+    TERMINAL_PHASES,
+    IterativeLoopState,
+    Phase,
+    load_state,
+    save_state,
+)
 
 
 def _run_interactive_if_ready(controller: IterativeRunController, state: IterativeLoopState) -> None:
@@ -56,31 +62,46 @@ def _run_interactive_if_ready(controller: IterativeRunController, state: Iterati
     controller.finish_interactive_cycle(result)
 
 
-def run_loop(*, once: bool = False, poll_sec: int | None = None) -> int:
-    print("Iterative loop runner started", flush=True)
+def run_loop(*, once: bool = False, poll_sec: int | None = None, chain: bool = False) -> int:
     load_repo_dotenv()
     config = load_config()
     interval = poll_sec if poll_sec is not None else config.iterative_loop_poll_sec
     controller = IterativeRunController(config)
 
+    if chain:
+        print("Iterative loop foreground chain started", flush=True)
+    else:
+        print("Iterative loop runner started", flush=True)
+
     while True:
         state = load_state(config)
+        if state.phase in TERMINAL_PHASES:
+            print(f"Workflow finished: phase={state.phase} {state.status_message or ''}", flush=True)
+            return 0 if state.phase == Phase.COMPLETED else 1
+
         if state.phase == Phase.RUNNING_INTERACTIVE:
             _run_interactive_if_ready(controller, state)
         elif is_workflow_active(state):
             controller.tick()
+
         if once:
             return 0
-        time.sleep(max(5, interval))
+        if not chain:
+            time.sleep(max(5, interval))
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="BLAST autonomous iterative loop runner")
     parser.add_argument("--once", action="store_true", help="Single iteration then exit")
+    parser.add_argument(
+        "--chain",
+        action="store_true",
+        help="Run until COMPLETED/FAILED/STOPPED (no poll sleep; for foreground salloc sessions)",
+    )
     parser.add_argument("--poll-sec", type=int, default=None)
     args = parser.parse_args()
     try:
-        raise SystemExit(run_loop(once=args.once, poll_sec=args.poll_sec))
+        raise SystemExit(run_loop(once=args.once, poll_sec=args.poll_sec, chain=args.chain))
     except KeyboardInterrupt:
         raise SystemExit(0) from None
 
