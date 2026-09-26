@@ -18,6 +18,7 @@ PERLMUTTER_RUNTIME_REL_PATHS: tuple[str, ...] = (
     "blast_lib/iterative_loop/remote_workflow.py",
     "blast_lib/iterative_loop/slurm_timing.py",
     "blast_lib/iterative_loop/slurm_job_state.py",
+    "blast_lib/iterative_loop/slurm_cancel.py",
     "blast_lib/iterative_loop/slurm_env.py",
     "blast_lib/iterative_loop/salloc_command.py",
     "blast_lib/iterative_loop/runbop_launch.py",

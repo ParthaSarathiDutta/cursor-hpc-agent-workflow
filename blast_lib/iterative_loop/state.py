@@ -222,7 +222,13 @@ def request_stop(config: UIConfig) -> IterativeLoopState:
         cancel_msg = ""
         if state.active_job_id:
             try:
-                ssh_exec(config, f"scancel {state.active_job_id}", timeout=20)
+                from blast_lib.iterative_loop.slurm_cancel import scancel_argv
+
+                ssh_exec(
+                    config,
+                    f"{' '.join(scancel_argv(state.active_job_id))} 2>/dev/null || true",
+                    timeout=20,
+                )
                 cancel_msg = f" Sent scancel {state.active_job_id}."
             except RemoteError:
                 cancel_msg = f" Could not scancel {state.active_job_id} (allocation may still run)."

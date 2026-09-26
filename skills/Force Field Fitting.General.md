@@ -118,6 +118,7 @@ polymorphs_ce = list(all_polymorphs[i] for i in [0, 1])
 - **Autonomous NERSC loop (current):** UI Start submits one **cron-QOS orchestrator** (`sbatch -q cron`); it runs **sequential** `salloc --qos interactive` + Step B RunBOP, then local **`range_core`** per cycle (at most one GPU allocation at a time). State: `<run_folder>/.agentic_loop/workflow.json`. See `docs/autonomous-iterative-loop.md`.
 - **Orchestrator salloc:** Step B runs as `salloc … -- bash -c '…parallel RunBOP…'` on the **granted allocation** (same as Submit Next Job); stream salloc stdout and persist **`Granted job allocation <id>`** to `workflow.json` immediately for Stop/`scancel`.
 - **Orchestrator pipe hang:** after interactive **TIMEOUT**, `salloc`/bash/`parallel` on the login node may keep stdout open even though the allocation job ended; poll **`sacct` State** and SIGTERM the salloc process group so the cron orchestrator can reach VALIDATING/Range (do not rely on EOF from `proc.stdout` alone).
+- **Job isolation (Stop/cleanup):** `scancel` only explicit numeric ids from `<run_folder>/.agentic_loop/workflow.json` (`slurm_cancel.py`); never `scancel -u`/QOS/partition or squeue grep; `killpg` only on the orchestrator’s own `Popen(start_new_session=True)` salloc session.
 
 ---
 

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from blast_lib.iterative_loop.slurm_cancel import scancel_job_local
 from blast_lib.iterative_loop.slurm_job_state import (
     fetch_sacct_job_state_local,
     slurm_state_is_terminal,
@@ -335,6 +336,7 @@ def _terminate_process_tree(
     grace_sec: float,
     kill_timeout_sec: float,
 ) -> None:
+    """Kill only the session/process group started by this orchestrator Popen."""
     if proc.poll() is not None:
         return
     try:
@@ -355,17 +357,6 @@ def _terminate_process_tree(
     except subprocess.TimeoutExpired:
         proc.kill()
         proc.wait()
-
-
-def _scancel_job_local(job_id: str) -> None:
-    try:
-        subprocess.run(
-            ["scancel", job_id.strip()],
-            capture_output=True,
-            timeout=30,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        pass
 
 
 def stream_shell_run(
@@ -443,7 +434,7 @@ def stream_shell_run(
         if should_abort and should_abort():
             aborted = True
             if active_job:
-                _scancel_job_local(active_job)
+                scancel_job_local(active_job)
             _terminate_process_tree(
                 proc,
                 grace_sec=cleanup_grace_sec,

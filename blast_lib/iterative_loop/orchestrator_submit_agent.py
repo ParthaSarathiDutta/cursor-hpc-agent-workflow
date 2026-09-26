@@ -20,6 +20,10 @@ from blast_lib.iterative_loop.remote_workflow import (
     is_active_status,
     workflow_json_path,
 )
+from blast_lib.iterative_loop.slurm_cancel import (
+    collect_orchestrator_workflow_cancel_ids,
+    scancel_jobs_via_ssh,
+)
 from blast_lib.remote import RemoteError, ssh_exec, ssh_write_file
 
 _SBATCH_PARSABLE_RE = re.compile(r"^(\d+)")
@@ -207,23 +211,19 @@ class OrchestratorSubmitAgent:
 
 
 def cancel_orchestrator_workflow(config: UIConfig, run_folder: str) -> None:
-    """scancel orchestrator + current interactive job; mark workflow STOPPED."""
+    """scancel only job ids recorded in this run's workflow.json; mark STOPPED."""
     path = workflow_json_path(run_folder)
     cmd = f"cat {shlex.quote(path.as_posix())} 2>/dev/null || true"
     raw = ssh_exec(config, cmd, timeout=30).strip()
     if not raw:
         return
     data = json.loads(raw)
-    ids: list[str] = []
-    for key in ("current_interactive_job_id", "orchestrator_job_id"):
-        jid = data.get(key)
-        if jid and str(jid).isdigit():
-            ids.append(str(jid))
-    for c in data.get("cycles") or []:
-        if c.get("gpu_job_id") and c.get("range_status") != "COMPLETED":
-            ids.append(str(c["gpu_job_id"]))
-    for jid in dict.fromkeys(ids):
-        ssh_exec(config, f"scancel {jid} 2>/dev/null || true", timeout=15)
+    ids = collect_orchestrator_workflow_cancel_ids(data)
+
+    def _ssh(command: str, timeout: float) -> str:
+        return ssh_exec(config, command, timeout=timeout)
+
+    scancel_jobs_via_ssh(_ssh, ids)
     data["status"] = WorkflowStatus.STOPPED
     data["phase"] = WorkflowPhase.STOPPED
     data["status_message"] = "Stopped by user (orchestrator and interactive jobs cancelled)."

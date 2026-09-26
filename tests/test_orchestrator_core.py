@@ -299,7 +299,7 @@ def test_stream_shell_run_stop_aborts_and_scancels(monkeypatch, tmp_path):
 
     cancelled: list[str] = []
     monkeypatch.setattr(
-        "blast_lib.iterative_loop.orchestrator_core._scancel_job_local",
+        "blast_lib.iterative_loop.orchestrator_core.scancel_job_local",
         lambda jid: cancelled.append(jid),
     )
 

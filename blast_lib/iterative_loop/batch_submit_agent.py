@@ -166,14 +166,14 @@ def cancel_remote_workflow(config: UIConfig, run_folder: str) -> None:
     if not raw:
         return
     data = json.loads(raw)
-    ids: list[str] = []
-    for c in data.get("cycles") or []:
-        for key in ("gpu_job_id", "range_job_id"):
-            jid = c.get(key)
-            if jid and str(jid).isdigit():
-                ids.append(str(jid))
-    for jid in dict.fromkeys(ids):
-        ssh_exec(config, f"scancel {jid} 2>/dev/null || true", timeout=15)
+    from blast_lib.iterative_loop.slurm_cancel import collect_batch_workflow_cancel_ids, scancel_jobs_via_ssh
+
+    ids = collect_batch_workflow_cancel_ids(data)
+
+    def _ssh(command: str, timeout: float) -> str:
+        return ssh_exec(config, command, timeout=timeout)
+
+    scancel_jobs_via_ssh(_ssh, ids)
     data["status"] = WorkflowStatus.STOPPED
     data["status_message"] = "Stopped by user (pending/running Slurm jobs cancelled)."
     data["error"] = None
