@@ -34,6 +34,11 @@ class UIConfig:
     input_txt_name: str = "input.txt"
     run_dir_glob: str = "ML-Tersoff*"
     blast_python: str = "/global/cfs/cdirs/m1917/blast_ff/bin/miniconda3/bin/python"
+    # LAMMPS (2020-era build) needs an old CUDA 11.0 runtime (bundled in the blast_ff
+    # conda env) and a Cray-MPICH GNU-ABI shim only present under NERSC's Shifter libs —
+    # neither is on the default interactive-node LD_LIBRARY_PATH. See format_env_setup_command.
+    lammps_cudart_lib: str = "/global/cfs/cdirs/m1917/blast_ff/bin/miniconda3/lib/libcudart.so.11.0"
+    shifter_mpich_shim_dir: str = "/usr/lib/shifter/mpich-2.2"
     submit_account: str = "m3794"
     salloc_nodes: int = 2
     salloc_time: str = "00:10:00"

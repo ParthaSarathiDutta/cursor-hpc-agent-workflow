@@ -14,7 +14,7 @@ import streamlit as st
 from blast_lib.agenticblast_submit import SubmitPathError, list_blast_run_dirs, normalize_run_path
 from blast_lib.config import load_config
 from blast_lib.iterative_loop.controller import IterativeRunController, is_workflow_active
-from blast_lib.iterative_loop.state import Phase, begin_workflow, load_state, request_stop
+from blast_lib.iterative_loop.state import begin_workflow, load_state, request_stop
 from blast_lib.remote import ssh_ping
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,18 +31,20 @@ if not ssh_ok:
 state = load_state(config)
 active = is_workflow_active(state)
 
-PHASE_LABELS = {
-    Phase.SUBMITTING: "Preparing input.txt…",
-    Phase.RUNNING_INTERACTIVE: "Interactive salloc + RunBOP running…",
-    Phase.ANALYZING_BEST_SET: "Finding best set…",
-    Phase.UPDATING_RANGES: "Updating parameter ranges…",
-    Phase.STARTING_NEXT_CYCLE: "Starting next cycle…",
-    Phase.COMPLETED: "Workflow complete.",
-    Phase.FAILED: "Failed.",
-    Phase.STOPPED: "Stopped.",
-    Phase.IDLE: "Idle.",
+# String keys — safe when Streamlit still has a pre-RUNNING_INTERACTIVE Phase enum cached.
+PHASE_LABELS: dict[str, str] = {
+    "IDLE": "Idle.",
+    "SUBMITTING": "Preparing input.txt…",
+    "RUNNING_INTERACTIVE": "Interactive salloc + RunBOP running…",
+    "WAITING_FOR_JOB": "Waiting for Slurm job…",
+    "ANALYZING_BEST_SET": "Finding best set…",
+    "UPDATING_RANGES": "Updating parameter ranges…",
+    "STARTING_NEXT_CYCLE": "Starting next cycle…",
+    "COMPLETED": "Workflow complete.",
+    "FAILED": "Failed.",
+    "STOPPED": "Stopped.",
 }
-
+TERMINAL_PHASE_VALUES = frozenset({"IDLE", "COMPLETED", "FAILED", "STOPPED"})
 
 def _ensure_runner_started() -> None:
     if not RUNNER_SCRIPT.is_file():
@@ -62,8 +64,8 @@ with col_b:
 st.divider()
 st.subheader("Status")
 
-if state.phase in (Phase.IDLE, Phase.COMPLETED, Phase.FAILED, Phase.STOPPED):
-    status_label = "IDLE" if state.phase == Phase.IDLE else state.phase
+if state.phase in TERMINAL_PHASE_VALUES:
+    status_label = "IDLE" if state.phase == "IDLE" else state.phase
 else:
     status_label = "RUNNING"
 
@@ -108,7 +110,7 @@ if state.scored_trial_count_before is not None:
 if state.error:
     st.error(state.error)
 
-if state.phase == Phase.RUNNING_INTERACTIVE:
+if state.phase == "RUNNING_INTERACTIVE":
     st.caption(
         "Runner holds SSH for this allocation. When it ends and ho.report gains new trials, "
         "RangeAgent updates ranges."
@@ -147,7 +149,7 @@ else:
             st.success("Workflow started. Runner will continue in the background.")
             st.rerun()
 
-if active or state.phase not in (Phase.IDLE, Phase.COMPLETED):
+if active or state.phase not in ("IDLE", "COMPLETED"):
     if st.button("Stop workflow"):
         request_stop(config)
         st.rerun()

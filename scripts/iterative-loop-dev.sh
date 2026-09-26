@@ -37,7 +37,15 @@ cmd_start() {
   PY="$(_venv_python)"
   echo "Starting iterative loop runner (background)."
   echo "Logs: ${LOG_FILE}"
-  nohup "${PY}" -m blast_lib.iterative_loop.runner >>"${LOG_FILE}" 2>&1 &
+  # </dev/null + disown fully detach from this shell/terminal (nohup alone only blocks
+  # SIGHUP, not job-control cleanup when the invoking terminal session ends). caffeinate
+  # keeps macOS from idle-sleeping while the runner holds a blocking interactive SSH call.
+  if command -v caffeinate >/dev/null 2>&1; then
+    nohup caffeinate -i "${PY}" -u -m blast_lib.iterative_loop.runner </dev/null >>"${LOG_FILE}" 2>&1 &
+  else
+    nohup "${PY}" -u -m blast_lib.iterative_loop.runner </dev/null >>"${LOG_FILE}" 2>&1 &
+  fi
+  disown
   echo $! >"${PID_FILE}"
   echo "Runner pid $(cat "${PID_FILE}")"
 }

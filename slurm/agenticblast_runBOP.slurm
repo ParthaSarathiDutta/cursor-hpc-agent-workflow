@@ -16,7 +16,7 @@ cd "${SLURM_SUBMIT_DIR}"
 
 INPUT="{{INPUT_TXT_NAME}}"
 PY="{{BLAST_PYTHON}}"
-inner='cd {}; unlink tmp; '"${PY}"' {}RunBOP.py'
+inner='cd {}; rm -rf tmp; '"${PY}"' {}RunBOP.py'
 
 echo "Job ${SLURM_JOB_ID} on $(hostname)"
 echo "Submit dir: ${SLURM_SUBMIT_DIR}"

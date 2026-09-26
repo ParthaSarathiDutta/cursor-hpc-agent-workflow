@@ -129,12 +129,29 @@ def format_salloc_command(
     return " ".join(parts)
 
 
+def format_env_setup_command(config: UIConfig) -> str:
+    """
+    Shell snippet (run once before RunBOP.py) that fixes missing shared libs for the
+    2020-era LAMMPS build: a scoped shim dir symlinking only libcudart.so.11.0 (avoids
+    shadowing the system libstdc++ that Kokkos needs) plus the Shifter Cray-MPICH ABI dir.
+    """
+    root = _blast_root_norm(config)
+    shim_dir = f"{root}/.env_shim"
+    cudart_name = config.lammps_cudart_lib.rsplit("/", 1)[-1]
+    return (
+        f'SHIM="{shim_dir}"; mkdir -p "$SHIM"; '
+        f'ln -sf "{config.lammps_cudart_lib}" "$SHIM/{cudart_name}"; '
+        f'export LD_LIBRARY_PATH="$SHIM:{config.shifter_mpich_shim_dir}:$LD_LIBRARY_PATH"'
+    )
+
+
 def format_parallel_command(config: UIConfig) -> str:
     """Run RunBOP.py in each folder listed in input.txt (on compute node after salloc)."""
     root = _blast_root_norm(config)
     py = config.blast_python
-    inner = f'cd {{}}; unlink tmp; {py} {{}}RunBOP.py'
+    inner = f'cd {{}}; rm -rf tmp; {py} {{}}RunBOP.py'
     return (
+        f"{format_env_setup_command(config)} && "
         f"cd {root} && cat {config.input_txt_name} | "
         f"parallel {shlex.quote(inner)}"
     )

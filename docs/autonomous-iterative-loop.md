@@ -28,9 +28,14 @@ Dashboard **Strategy** column on runs is a folder-name heuristic (`run_catalog`)
 
 **Autonomous Iterative Fitting**: folder, walltime, number of runs → **Start**. **Stop** sets `stop_requested` during an interactive run (will not start another cycle; tries `scancel` on the allocation id when known).
 
-## Job completion
+## Job completion (strict)
 
-When the SSH interactive session ends, the controller syncs `ho.report`. A cycle succeeds only if **scored trial count increased** vs before that allocation.
+When the SSH interactive session ends, a cycle counts as **complete** only if all of:
+
+1. **Walltime:** `sacct` **Elapsed** for the allocation job id is at least the requested walltime (`state.walltime`, e.g. `00:02:00`), allowing **5 seconds** slack for startup/teardown.
+2. **Fitting progress:** synced `ho.report` **scored trial count increased** vs before that allocation.
+
+Slurm `FAILED` / SSH exit code **1** alone does **not** fail a cycle if the above pass (e.g. time limit). Short allocations (early Step B exit) **fail** even if a few trials were added.
 
 ## Recovery
 

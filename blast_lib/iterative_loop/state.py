@@ -37,7 +37,6 @@ ACTIVE_PHASES = frozenset(
     }
 )
 
-
 @dataclass
 class IterativeLoopState:
     phase: str = Phase.IDLE
@@ -59,6 +58,7 @@ class IterativeLoopState:
     workflow_id: str = ""
     interactive_launch_started: bool = False
     last_launch_returncode: int | None = None
+    last_slurm_elapsed_sec: int | None = None
     stop_requested: bool = False
 
     def remaining_cycles(self) -> int:

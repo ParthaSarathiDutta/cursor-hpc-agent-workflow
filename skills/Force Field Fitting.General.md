@@ -107,11 +107,12 @@ polymorphs_ce = list(all_polymorphs[i] for i in [0, 1])
 2. Set `model.json` (bounds for your element pair)  
 3. Choose polymorph strategy in `main1.py`  
 4. Run search (`RunBOP.py`) or one-shot (`run.sh` / `main1.py` with args)  
-   - **AgenticBLAST batch:** write `input.txt` (run dir paths) at project root → interactive `salloc` → `cat input.txt \| parallel "… RunBOP.py"` on the compute node (see `docs/agenticblast-submit.md`)  
+   - **AgenticBLAST batch:** write `input.txt` (run dir paths) at project root → interactive `salloc` → `cat input.txt \| parallel "… RunBOP.py"` on the compute node (see `docs/agenticblast-submit.md`); Step B must **`rm -rf tmp`** before RunBOP (not `unlink tmp`) when `tmp` is a leftover directory, or RunBOP fails to symlink `/dev/shm`  
    - **Dashboard Create Run Folder:** rsync **template** folder → patch `main1.py` (lattice/ce maxAE%; eos `shape.obj`/`shift.obj`; phonon `ceil.maxAE%`; elastic MAE%), seed restart from optional **source** folder (see `docs/run-folder-setup.md`)  
 5. Analyze `reports/ho.report`  
 6. Optional: `startmodel.py` / `changemodel.json.py` to tighten bounds; restart from `mcts_restart.*`
-- **Autonomous iterative loop (dashboard):** single folder, repeated **interactive salloc + RunBOP** (user walltime); after each allocation, require **new scored trials** in `ho.report`, then remote **`changemodel.json.py`** + update **`mcts_restart.tersoff`** (`Sb Sb Sb 1` prefix); headless `./scripts/iterative-loop-dev.sh start` — see `docs/autonomous-iterative-loop.md`
+- **Autonomous iterative loop (dashboard):** single folder, repeated **interactive salloc + RunBOP** (user walltime); cycle complete only if **`sacct` Elapsed ≥ walltime** (5s slack) **and** new scored trials in `ho.report`, then **`changemodel.json.py`** + **`mcts_restart.tersoff`**; `./scripts/iterative-loop-dev.sh start` — see `docs/autonomous-iterative-loop.md`
+- **Iterative loop one workflow:** set `total_cycles` + walltime once (`begin_workflow` / UI Start); keep a **long-lived** `blast_lib.iterative_loop.runner` until `COMPLETED` — short-lived shells can leave `interactive_launch_started=true` and FAIL on restart. Cycles can still advance if `ho.report` grows even when Step B exits non-zero quickly (RunBOP/`tmp`/LAMMPS); that is not the same as using the full salloc walltime.
 
 ---
 

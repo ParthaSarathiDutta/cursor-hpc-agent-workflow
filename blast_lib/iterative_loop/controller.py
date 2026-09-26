@@ -12,6 +12,7 @@ from blast_lib.iterative_loop.state import (
     load_state,
     save_state,
 )
+from blast_lib.iterative_loop.slurm_timing import allocation_met_walltime, fetch_job_elapsed_seconds
 from blast_lib.iterative_loop.submit_agent import InteractiveSubmitResult, SubmitAgent
 from blast_lib.remote import RemoteError
 
@@ -80,6 +81,25 @@ class IterativeRunController:
         before = state.scored_trial_count_before
         if before is None:
             return self._fail(state, "Missing scored_trial_count_before for this cycle")
+
+        job_id = alloc or state.active_job_id
+        if not job_id:
+            return self._fail(state, "No Slurm job id in interactive log — cannot verify walltime.")
+
+        elapsed_sec = fetch_job_elapsed_seconds(self.config, job_id)
+        if elapsed_sec is None:
+            return self._fail(state, f"Could not read sacct Elapsed for job {job_id}.")
+
+        met, required_sec = allocation_met_walltime(elapsed_sec, state.walltime)
+        state.touch(last_slurm_elapsed_sec=elapsed_sec)
+        save_state(self.config, state)
+        if not met:
+            return self._fail(
+                state,
+                f"Allocation too short: sacct elapsed {elapsed_sec}s "
+                f"(need ≥{required_sec}s walltime {state.walltime}, 5s slack). "
+                f"Cycle not complete.",
+            )
 
         try:
             rp = sync_and_report_path(self.config, state.run_folder)

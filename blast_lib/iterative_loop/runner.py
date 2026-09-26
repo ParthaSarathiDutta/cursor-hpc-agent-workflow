@@ -37,6 +37,7 @@ def _run_interactive_if_ready(controller: IterativeRunController, state: Iterati
     try:
         result = controller.submit_agent.run_interactive(state.run_folder, state.walltime)
     except Exception as exc:  # noqa: BLE001
+        print(f"Interactive launch error: {exc}", flush=True)
         st = load_state(controller.config)
         st.touch(
             phase=Phase.FAILED,
@@ -56,6 +57,7 @@ def _run_interactive_if_ready(controller: IterativeRunController, state: Iterati
 
 
 def run_loop(*, once: bool = False, poll_sec: int | None = None) -> int:
+    print("Iterative loop runner started", flush=True)
     load_repo_dotenv()
     config = load_config()
     interval = poll_sec if poll_sec is not None else config.iterative_loop_poll_sec

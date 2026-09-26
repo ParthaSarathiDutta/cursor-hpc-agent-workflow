@@ -35,7 +35,7 @@ def ssh_stream_command(
     Stream merged stdout/stderr from a long-running SSH command line-by-line.
     Raises RemoteError on timeout or launch failure.
     """
-    ssh_args = ["ssh"]
+    ssh_args = ["ssh", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=20"]
     if allocate_tty:
         ssh_args.append("-t")
     ssh_args.extend([config.ssh_host, remote_cmd])
@@ -80,7 +80,9 @@ def ssh_stream_run(
 ) -> SSHStreamResult:
     """Collect full log from ssh_stream_command and return exit code."""
     lines: list[str] = []
-    ssh_args = ["ssh"]
+    # Keepalive: this call blocks for the full interactive walltime (minutes+); without
+    # this, a brief Wi-Fi/network hiccup on the client can silently drop the SSH session.
+    ssh_args = ["ssh", "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=20"]
     if allocate_tty:
         ssh_args.append("-t")
     ssh_args.extend([config.ssh_host, remote_cmd])

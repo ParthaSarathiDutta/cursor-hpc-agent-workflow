@@ -54,11 +54,13 @@ def _run_full_cycle(ctrl: IterativeRunController, loop_config: UIConfig) -> None
     ctrl.finish_interactive_cycle(result)
 
 
+@patch("blast_lib.iterative_loop.controller.fetch_job_elapsed_seconds", return_value=600)
 @patch("blast_lib.iterative_loop.controller.sync_and_report_path")
 @patch("blast_lib.iterative_loop.controller.count_scored_trials")
 def test_three_cycles_three_interactive_launches(
     mock_count: MagicMock,
     mock_sync: MagicMock,
+    _mock_elapsed: MagicMock,
     loop_config: UIConfig,
 ):
     mock_sync.return_value = Path("/cache/ho.report")
@@ -86,11 +88,13 @@ def test_three_cycles_three_interactive_launches(
     assert state.last_completed_cycle == 3
 
 
+@patch("blast_lib.iterative_loop.controller.fetch_job_elapsed_seconds", return_value=600)
 @patch("blast_lib.iterative_loop.controller.sync_and_report_path")
 @patch("blast_lib.iterative_loop.controller.count_scored_trials")
 def test_no_new_trials_fails_without_range_update(
     mock_count: MagicMock,
     mock_sync: MagicMock,
+    _mock_elapsed: MagicMock,
     loop_config: UIConfig,
 ):
     mock_sync.return_value = Path("/cache/ho.report")
@@ -157,11 +161,13 @@ def test_prepare_failure_does_not_advance(
     assert state.current_cycle == 1
 
 
+@patch("blast_lib.iterative_loop.controller.fetch_job_elapsed_seconds", return_value=600)
 @patch("blast_lib.iterative_loop.controller.sync_and_report_path")
 @patch("blast_lib.iterative_loop.controller.count_scored_trials")
 def test_failed_range_update_does_not_start_next_cycle(
     mock_count: MagicMock,
     mock_sync: MagicMock,
+    _mock_elapsed: MagicMock,
     loop_config: UIConfig,
 ):
     mock_sync.return_value = Path("/cache/ho.report")
@@ -180,11 +186,13 @@ def test_failed_range_update_does_not_start_next_cycle(
     assert len(submit.interactive_calls) == 1
 
 
+@patch("blast_lib.iterative_loop.controller.fetch_job_elapsed_seconds", return_value=600)
 @patch("blast_lib.iterative_loop.controller.sync_and_report_path")
 @patch("blast_lib.iterative_loop.controller.count_scored_trials")
 def test_stop_requested_after_cycle_skips_next_interactive(
     mock_count: MagicMock,
     mock_sync: MagicMock,
+    _mock_elapsed: MagicMock,
     loop_config: UIConfig,
 ):
     mock_sync.return_value = Path("/cache/ho.report")
@@ -204,6 +212,32 @@ def test_stop_requested_after_cycle_skips_next_interactive(
     state = load_state(loop_config)
     assert state.phase == Phase.STOPPED
     assert len(submit.interactive_calls) == 1
+
+
+@patch("blast_lib.iterative_loop.controller.fetch_job_elapsed_seconds", return_value=8)
+@patch("blast_lib.iterative_loop.controller.sync_and_report_path")
+@patch("blast_lib.iterative_loop.controller.count_scored_trials")
+def test_short_allocation_fails_even_with_new_trials(
+    mock_count: MagicMock,
+    mock_sync: MagicMock,
+    _mock_elapsed: MagicMock,
+    loop_config: UIConfig,
+):
+    mock_sync.return_value = Path("/cache/ho.report")
+    mock_count.side_effect = [5, 10]
+
+    submit = MockSubmit()
+    ctrl = IterativeRunController(loop_config, submit_agent=submit, range_agent=MockRange())
+
+    begin_workflow(loop_config, run_folder="/fake/f", walltime="00:02:00", total_cycles=3)
+    ctrl.tick()
+    result = submit.run_interactive("/fake/f", "00:02:00")
+    ctrl.finish_interactive_cycle(result)
+
+    state = load_state(loop_config)
+    assert state.phase == Phase.FAILED
+    assert "too short" in (state.error or "").lower()
+    assert state.last_slurm_elapsed_sec == 8
 
 
 def test_cycle_counter_persisted(loop_config: UIConfig):
