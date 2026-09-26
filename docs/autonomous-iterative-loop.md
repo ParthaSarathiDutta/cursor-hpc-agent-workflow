@@ -1,91 +1,65 @@
 # Autonomous iterative fitting loop
 
-Single BLAST run folder, repeated **GPU RunBOP** cycles with **Range** (changemodel + `mcts_restart.tersoff`) between cycles.
+Single BLAST run folder, repeated **interactive GPU RunBOP** cycles with **Range** (changemodel + `mcts_restart.tersoff`) between cycles.
 
-## Architecture (current — NERSC batch)
+## Architecture (current — NERSC orchestrator)
 
 | Piece | Role |
 |-------|------|
-| **BatchSubmitAgent** | One SSH session: deploy scripts, write `input.txt`, init `<run_folder>/.agentic_loop/workflow.json`, run `submit_chain.sh` (`sbatch --parsable` chain) |
-| **GPU job** | Batch RunBOP (`agenticblast_loop_gpu.slurm` + `scripts/agentic_loop_gpu.py`); records `cycle_N_before.json` |
-| **Range job** | CPU shared job (`agenticblast_loop_range.slurm` + `scripts/agentic_loop_range.py`); local `range_core` — no SSH |
-| **Dashboard** | Start submits chain; **Refresh** mirrors NERSC `workflow.json` to `.cursor/status/iterative_loop.json` |
+| **OrchestratorSubmitAgent** | One SSH session: deploy runtime, write `input.txt`, init `workflow.json`, **`sbatch -q cron`** orchestrator |
+| **Orchestrator job** | Login-pool **cron QOS** process runs `scripts/agentic_loop_orchestrator.py` |
+| **Per cycle** | One blocking **`salloc --qos interactive --constraint gpu`**, Step B RunBOP, then **local** `range_core` (no Range sbatch) |
+| **Dashboard** | Start submits orchestrator; **Refresh** mirrors NERSC `workflow.json` |
 
-**Mac is not required after Start.** No long-lived SSH, no `salloc`, no background runner for batch mode.
+**Mac is not required after Start.** No long-lived SSH, no pre-chained batch GPU jobs.
 
-### Slurm dependencies (N cycles)
+### Cycle sequence (N cycles)
 
-For each cycle `i`:
-
-1. **GPU** `i` — depends on **Range** `i-1` with `--dependency=afterok:` (cycle 1 has no dependency).
-2. **Range** `i` — depends on **GPU** `i` with `--dependency=afterany:`.
-
-Example (3 cycles):
+At most **one** interactive GPU allocation is submitted or running at any time:
 
 ```
-gpu1 → range1(afterany gpu1) → gpu2(afterok range1) → range2(afterany gpu2) → gpu3(afterok range2) → range3(afterany gpu3)
+for cycle in 1..N:
+  record trial count → unset SLURM_* → salloc interactive → RunBOP → validate → Range
+  on Range failure → FAILED (no next salloc)
+after cycle N Range → COMPLETED
 ```
-
-| Edge | Dependency | Why |
-|------|------------|-----|
-| GPU → Range | `afterany` | GPU may end at walltime (`TIMEOUT`); Range still validates science |
-| Range → next GPU | `afterok` | Next GPU only if Range passed trials + walltime + changemodel |
 
 ### Range validation (unchanged science)
 
-1. `sacct` Elapsed for the GPU job ≥ requested walltime − **5 s** slack  
-2. Scored trial count in `reports/ho.report` **increased** vs `cycle_N_before.json`  
-3. Best trial = minimum `finalObj` (same as dashboard `top_k_trials(..., k=1)`)  
-4. `changemodel.json.py` with extracted Tersoff parameters  
-5. Update `mcts_restart.tersoff` (preserve prefix e.g. `Sb Sb Sb 1`)
-
-On failure, Range exits non-zero → next GPU never becomes eligible (`afterok`).
+1. `sacct` Elapsed for the interactive allocation ≥ requested walltime − **5 s** slack  
+2. Scored trial count in `reports/ho.report` **increased** vs baseline  
+3. Best trial = minimum `finalObj`  
+4. `changemodel.json.py` + `mcts_restart.tersoff` update  
 
 ### Authoritative state (NERSC)
 
 `<run_folder>/.agentic_loop/`:
 
-- `workflow.json` — status (`QUEUED` / `RUNNING` / `COMPLETED` / `FAILED` / `CANCELLED`), cycles, job ids, scores  
+- `workflow.json` — status, **phase**, orchestrator job id, interactive allocation ids, cycles, scores  
 - `cycle_N_before.json`, `cycle_N_range_result.json`  
-- `logs/gpu_cN_*.out`, `logs/range_cN_*.out`  
-- `submit_chain.sh` — generated submit script (audit)
+- `logs/orch-<jobid>.out`  
 
-Dashboard **Refresh** reads `workflow.json` over SSH (mirror only).
+### Accounts / QOS
 
-### GPU resources
-
-Reuses **batch** settings from config: `batch_nodes`, `batch_gpus`, `batch_qos`, `submit_account`, etc.  
-Per-cycle walltime = user **GPU time per cycle** (`HH:MM:SS`).
-
-Range jobs: `range_qos` (default `shared`), `range_time` (default `01:00:00`).
+- Orchestrator: **`m4597`** (or `orchestrator_cron_account` in config), **`-q cron -C cron`**
+- GPU cycles: **`m4597_g`** (or `gpu_account` / `submit_account`), **`salloc --qos interactive`**
 
 ### Inspect / stop on Perlmutter
 
 ```bash
 squeue --me
-sacct -j <jobid> -X --format=JobID,JobName,State,Elapsed,ExitCode -P
 cat <run_folder>/.agentic_loop/workflow.json
+sacct -j <orchestrator_or_interactive_job_id> -X --format=JobID,JobName,State,Elapsed,ExitCode -P
 ```
 
-**Stop (dashboard or code):** `scancel` on job ids recorded in `workflow.json`; status → `CANCELLED`.
+**Stop (dashboard):** `scancel` orchestrator + current interactive id; `workflow.json` → `STOPPED`.
 
 ---
 
-## Legacy: interactive `salloc` (Mac-tethered)
+## Legacy: batch Slurm chain
 
-Previous design: **SubmitAgent** blocking `salloc` + runner `./scripts/iterative-loop-dev.sh start|chain`.  
-State machine in `IterativeRunController` + `.cursor/status/iterative_loop.json`.  
-Still available in code for development (`runner --chain`); **UI Start uses batch mode**.
+Previous design: pre-submitted **gpu_regular** + **shared** dependency chain (`BatchSubmitAgent`). Code remains for reference; **UI Start uses the orchestrator path**.
 
----
+## Legacy: Mac-tethered interactive
 
-## Tests (local, no NERSC)
-
-```bash
-pytest tests/test_batch_chain.py tests/test_range_core.py tests/test_remote_workflow.py \
-  tests/test_iterative_controller.py tests/test_range_agent.py
-```
-
-## Config
-
-`loop_gpu_slurm_script`, `loop_range_slurm_script`, `range_qos`, `range_time`, plus existing `batch_*` and `blast_python` fields.
+**SubmitAgent** + `./scripts/iterative-loop-dev.sh` — development only.

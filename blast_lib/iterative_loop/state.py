@@ -106,6 +106,36 @@ def save_state(config: UIConfig, state: IterativeLoopState) -> None:
     tmp.replace(path)
 
 
+def begin_orchestrator_workflow(
+    config: UIConfig,
+    *,
+    run_folder: str,
+    walltime: str,
+    total_cycles: int,
+    workflow_id: str,
+    orchestrator_job_id: str | None,
+) -> IterativeLoopState:
+    state = IterativeLoopState(
+        phase=Phase.RUNNING_ON_NERSC,
+        run_folder=run_folder,
+        walltime=walltime,
+        total_cycles=total_cycles,
+        current_cycle=1,
+        last_completed_cycle=0,
+        error=None,
+        status_message="NERSC orchestrator running (sequential interactive GPU cycles)…",
+        workflow_id=workflow_id,
+        execution_mode="orchestrator",
+        nersc_workflow_status="RUNNING",
+        active_job_id=orchestrator_job_id,
+        interactive_launch_started=False,
+        stop_requested=False,
+    )
+    state.touch()
+    save_state(config, state)
+    return state
+
+
 def begin_batch_workflow(
     config: UIConfig,
     *,
@@ -166,11 +196,16 @@ def request_stop(config: UIConfig) -> IterativeLoopState:
     from blast_lib.remote import RemoteError, ssh_exec
 
     state = load_state(config)
-    if state.execution_mode == "batch" and state.run_folder:
-        from blast_lib.iterative_loop.batch_submit_agent import cancel_remote_workflow
-
+    if state.run_folder and state.execution_mode in ("batch", "orchestrator"):
         try:
-            cancel_remote_workflow(config, state.run_folder)
+            if state.execution_mode == "orchestrator":
+                from blast_lib.iterative_loop.orchestrator_submit_agent import cancel_orchestrator_workflow
+
+                cancel_orchestrator_workflow(config, state.run_folder)
+            else:
+                from blast_lib.iterative_loop.batch_submit_agent import cancel_remote_workflow
+
+                cancel_remote_workflow(config, state.run_folder)
         except RemoteError:
             pass
         state.touch(

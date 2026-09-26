@@ -6,7 +6,7 @@ import json
 import shlex
 
 from blast_lib.config_types import UIConfig
-from blast_lib.iterative_loop.remote_workflow import WorkflowStatus, workflow_json_path
+from blast_lib.iterative_loop.remote_workflow import WorkflowPhase, WorkflowStatus, workflow_json_path
 from blast_lib.iterative_loop.state import IterativeLoopState, Phase, load_state, save_state
 from blast_lib.remote import RemoteError, ssh_exec
 
@@ -61,17 +61,21 @@ def mirror_remote_to_local(config: UIConfig, run_folder: str) -> IterativeLoopSt
             last_range = "FAILED"
             break
 
-    active_job = None
-    for c in reversed(cycles):
-        if c.get("range_job_id") and c.get("range_status") not in ("COMPLETED", "FAILED"):
-            active_job = c.get("range_job_id")
-            break
-        if c.get("gpu_job_id") and not c.get("range_status"):
-            active_job = c.get("gpu_job_id")
-            break
+    active_job = data.get("current_interactive_job_id") or data.get("orchestrator_job_id")
+    if not active_job:
+        for c in reversed(cycles):
+            if c.get("range_job_id") and c.get("range_status") not in ("COMPLETED", "FAILED"):
+                active_job = c.get("range_job_id")
+                break
+            if c.get("gpu_job_id") and not c.get("range_status"):
+                active_job = c.get("gpu_job_id")
+                break
+
+    remote_phase = data.get("phase") or ""
+    mode = "orchestrator" if data.get("orchestrator_job_id") else "batch"
 
     state.touch(
-        execution_mode="batch",
+        execution_mode=mode,
         run_folder=data.get("run_folder") or run_folder,
         walltime=data.get("walltime") or state.walltime,
         total_cycles=total,
@@ -88,5 +92,9 @@ def mirror_remote_to_local(config: UIConfig, run_folder: str) -> IterativeLoopSt
         slurm_state=status,
         nersc_workflow_status=status,
     )
+    if remote_phase in WorkflowPhase.__dict__.values():
+        state.status_message = data.get("status_message") or state.status_message
+    if data.get("orchestrator_job_id"):
+        state.active_job_id = data.get("current_interactive_job_id") or data.get("orchestrator_job_id")
     save_state(config, state)
     return state

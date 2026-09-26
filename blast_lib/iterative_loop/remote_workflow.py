@@ -20,6 +20,19 @@ class WorkflowStatus:
     STOPPED = "STOPPED"
 
 
+class WorkflowPhase:
+    """Fine-grained orchestrator phase (stored in workflow.json)."""
+
+    QUEUED = "QUEUED"
+    AWAITING_SALLOC = "AWAITING_SALLOC"
+    RUNNING_GPU = "RUNNING_GPU"
+    VALIDATING = "VALIDATING"
+    RUNNING_RANGE = "RUNNING_RANGE"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    STOPPED = "STOPPED"
+
+
 @dataclass
 class CycleRecord:
     cycle: int
@@ -41,8 +54,20 @@ class RemoteWorkflow:
     walltime: str
     total_cycles: int
     status: str = WorkflowStatus.QUEUED
+    phase: str = WorkflowPhase.QUEUED
+    current_cycle: int = 0
     blast_root: str = ""
     blast_python: str = ""
+    orchestrator_job_id: str | None = None
+    current_interactive_job_id: str | None = None
+    salloc_attempts: int = 0
+    gpu_account: str = ""
+    salloc_account: str = ""
+    salloc_nodes: int = 2
+    salloc_ntasks_per_node: int = 4
+    salloc_gpus_per_task: int = 1
+    salloc_gpus: int = 8
+    salloc_qos: str = "interactive"
     created_at: str = ""
     updated_at: str = ""
     error: str | None = None
@@ -64,6 +89,10 @@ class RemoteWorkflow:
 
     def all_job_ids(self) -> list[str]:
         ids: list[str] = []
+        if self.orchestrator_job_id:
+            ids.append(self.orchestrator_job_id)
+        if self.current_interactive_job_id:
+            ids.append(self.current_interactive_job_id)
         for c in self.cycles:
             if c.gpu_job_id:
                 ids.append(c.gpu_job_id)
@@ -118,3 +147,13 @@ def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
 
 def is_active_status(status: str) -> bool:
     return status in (WorkflowStatus.QUEUED, WorkflowStatus.RUNNING)
+
+
+def is_active_phase(phase: str) -> bool:
+    return phase in (
+        WorkflowPhase.QUEUED,
+        WorkflowPhase.AWAITING_SALLOC,
+        WorkflowPhase.RUNNING_GPU,
+        WorkflowPhase.VALIDATING,
+        WorkflowPhase.RUNNING_RANGE,
+    )

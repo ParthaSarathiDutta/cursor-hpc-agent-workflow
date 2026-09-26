@@ -1,4 +1,4 @@
-"""Autonomous iterative fitting — NERSC batch Slurm dependency chain."""
+"""Autonomous iterative fitting — NERSC orchestrator (sequential interactive GPU)."""
 
 from __future__ import annotations
 
@@ -19,8 +19,8 @@ from blast_lib.remote import ssh_ping
 config = load_config()
 st.title("Autonomous Iterative Fitting")
 st.caption(
-    "Single run folder · Slurm batch GPU + Range jobs on NERSC · "
-    "changemodel.json.py between cycles · Mac not required after Start"
+    "Single run folder · sequential interactive GPU cycles on NERSC · "
+    "Range update between cycles · Mac not required after Start"
 )
 
 ssh_ok, ssh_msg = ssh_ping(config, timeout=15)
@@ -33,8 +33,8 @@ active = is_workflow_active(state)
 PHASE_LABELS: dict[str, str] = {
     "IDLE": "Idle.",
     "SUBMITTING": "Preparing…",
-    "QUEUED_ON_NERSC": "Queued on NERSC (Slurm chain submitted).",
-    "RUNNING_ON_NERSC": "Running on NERSC (GPU / Range jobs).",
+    "QUEUED_ON_NERSC": "Queued on NERSC.",
+    "RUNNING_ON_NERSC": "Running on NERSC (orchestrator / GPU / Range).",
     "RUNNING_INTERACTIVE": "Interactive salloc + RunBOP (legacy).",
     "WAITING_FOR_JOB": "Waiting for Slurm job…",
     "ANALYZING_BEST_SET": "Finding best set…",
@@ -86,7 +86,7 @@ st.write("**Current phase:**", PHASE_LABELS.get(state.phase, state.phase))
 if state.status_message:
     st.info(state.status_message)
 if state.stop_requested:
-    st.warning("Stop requested — pending Slurm jobs were cancelled where possible.")
+    st.warning("Stop requested — orchestrator and active GPU allocation cancelled where possible.")
 if state.active_job_id:
     st.write(f"**Active Slurm job ID (last seen):** `{state.active_job_id}`")
 if state.run_folder:
@@ -115,7 +115,7 @@ else:
 
     folder_default = state.run_folder or (remote_dirs[0] if remote_dirs else "ML-Tersoff-1_PE")
     run_folder = st.text_input("Run folder (name or absolute path)", value=folder_default)
-    walltime = st.text_input("GPU time per cycle (HH:MM:SS)", value=state.walltime or "04:00:00")
+    walltime = st.text_input("GPU time per cycle (HH:MM:SS)", value=state.walltime or "00:10:00")
     total_cycles = st.number_input("Number of cycles", min_value=1, max_value=50, value=3)
 
     if st.button("Start", type="primary", disabled=not ssh_ok):
@@ -125,12 +125,12 @@ else:
             st.error(str(exc))
         else:
             ctrl = IterativeRunController(config)
-            result = ctrl.submit_batch_workflow(path, walltime.strip(), int(total_cycles))
+            result = ctrl.submit_orchestrator_workflow(path, walltime.strip(), int(total_cycles))
             if result.phase == "FAILED":
                 st.error(result.error or "Submit failed.")
             else:
                 st.success(
-                    "Slurm dependency chain submitted on NERSC. "
+                    "Orchestrator started on NERSC. "
                     "You can close this Mac; use Refresh to reconnect."
                 )
             st.rerun()
@@ -141,4 +141,4 @@ if active or state.phase not in ("IDLE", "COMPLETED"):
         st.rerun()
 
 st.divider()
-st.caption("See docs/autonomous-iterative-loop.md. GPU→Range: afterany; Range→next GPU: afterok.")
+st.caption("See docs/autonomous-iterative-loop.md.")

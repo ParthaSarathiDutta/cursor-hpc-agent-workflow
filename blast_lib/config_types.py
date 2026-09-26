@@ -40,6 +40,10 @@ class UIConfig:
     lammps_cudart_lib: str = "/global/cfs/cdirs/m1917/blast_ff/bin/miniconda3/lib/libcudart.so.11.0"
     shifter_mpich_shim_dir: str = "/usr/lib/shifter/mpich-2.2"
     submit_account: str = "m3794"
+    orchestrator_cron_account: str = "m4597"
+    orchestrator_cron_walltime: str = "1-00:00:00"
+    orchestrator_cron_margin_hours: float = 2.0
+    orchestrator_slurm_remote_name: str = "agentic_loop_orchestrator.slurm"
     salloc_nodes: int = 2
     salloc_time: str = "00:10:00"
     salloc_ntasks_per_node: int = 4
