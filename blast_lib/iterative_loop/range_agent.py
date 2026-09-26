@@ -2,59 +2,30 @@
 
 from __future__ import annotations
 
-import re
 import shlex
-from dataclasses import dataclass
-
 from blast_lib.agenticblast_submit import normalize_run_path
-from blast_lib.changemodel_bounds import TERSEOFF_PARAM_COUNT
 from blast_lib.config_types import UIConfig
 from blast_lib.iterative_loop.ho_report_utils import best_trial_from_report, sync_and_report_path
+from blast_lib.iterative_loop.tersoff_params import (  # re-exported for tests/callers
+    DEFAULT_SB_PREFIX,
+    extract_tersoff_floats,
+    extract_tersoff_param_strings,
+    format_mcts_restart_line,
+    split_mcts_restart_line,
+)
+from blast_lib.iterative_loop.range_types import RangeUpdateResult
 from blast_lib.remote import RemoteError, ssh_exec, ssh_write_file
 
-DEFAULT_SB_PREFIX = "Sb Sb Sb 1"
-_FLOAT_RE = re.compile(r"-?[\d]+(?:\.[\d]*)?(?:[eE][+-]?\d+)?")
 
-
-@dataclass
-class RangeUpdateResult:
-    ok: bool
-    message: str
-    best_score: float | None = None
-    best_iteration: int | None = None
-
-
-def extract_tersoff_param_strings(input_params: str) -> list[str]:
-    """Thirteen numeric tokens from ho.report input line (after element-pair prefix)."""
-    text = input_params.strip()
-    if ":" in text:
-        text = text.split(":", 1)[1].strip()
-    tokens = _FLOAT_RE.findall(text)
-    if len(tokens) < TERSEOFF_PARAM_COUNT:
-        raise ValueError(
-            f"Expected {TERSEOFF_PARAM_COUNT} parameters in input line, found {len(tokens)}"
-        )
-    return tokens[-TERSEOFF_PARAM_COUNT:]
-
-
-def extract_tersoff_floats(input_params: str) -> list[float]:
-    return [float(x) for x in extract_tersoff_param_strings(input_params)]
-
-
-def split_mcts_restart_line(text: str) -> tuple[str, list[float]]:
-    parts = text.strip().split()
-    if len(parts) < TERSEOFF_PARAM_COUNT:
-        raise ValueError("mcts_restart.tersoff too short")
-    floats = [float(x) for x in parts[-TERSEOFF_PARAM_COUNT:]]
-    prefix = " ".join(parts[:-TERSEOFF_PARAM_COUNT]).strip() or DEFAULT_SB_PREFIX
-    return prefix, floats
-
-
-def format_mcts_restart_line(prefix: str, values: list[float]) -> str:
-    if len(values) != TERSEOFF_PARAM_COUNT:
-        raise ValueError(f"Need {TERSEOFF_PARAM_COUNT} values for mcts_restart")
-    nums = " ".join(f"{v:.6f}" for v in values)
-    return f"{prefix} {nums}\n"
+__all__ = [
+    "RangeUpdateResult",
+    "RangeAgent",
+    "DEFAULT_SB_PREFIX",
+    "extract_tersoff_floats",
+    "extract_tersoff_param_strings",
+    "format_mcts_restart_line",
+    "split_mcts_restart_line",
+]
 
 
 class RangeAgent:

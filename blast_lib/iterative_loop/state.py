@@ -15,6 +15,8 @@ from blast_lib.config_types import REPO_ROOT, UIConfig
 class Phase(StrEnum):
     IDLE = "IDLE"
     SUBMITTING = "SUBMITTING"
+    QUEUED_ON_NERSC = "QUEUED_ON_NERSC"
+    RUNNING_ON_NERSC = "RUNNING_ON_NERSC"
     RUNNING_INTERACTIVE = "RUNNING_INTERACTIVE"
     WAITING_FOR_JOB = "WAITING_FOR_JOB"  # legacy; unused in interactive loop
     ANALYZING_BEST_SET = "ANALYZING_BEST_SET"
@@ -30,6 +32,8 @@ TERMINAL_PHASES = frozenset({Phase.IDLE, Phase.COMPLETED, Phase.FAILED, Phase.ST
 ACTIVE_PHASES = frozenset(
     {
         Phase.SUBMITTING,
+        Phase.QUEUED_ON_NERSC,
+        Phase.RUNNING_ON_NERSC,
         Phase.RUNNING_INTERACTIVE,
         Phase.ANALYZING_BEST_SET,
         Phase.UPDATING_RANGES,
@@ -60,6 +64,8 @@ class IterativeLoopState:
     last_launch_returncode: int | None = None
     last_slurm_elapsed_sec: int | None = None
     stop_requested: bool = False
+    execution_mode: str = "interactive"  # interactive | batch
+    nersc_workflow_status: str | None = None
 
     def remaining_cycles(self) -> int:
         if self.total_cycles <= 0:
@@ -100,6 +106,34 @@ def save_state(config: UIConfig, state: IterativeLoopState) -> None:
     tmp.replace(path)
 
 
+def begin_batch_workflow(
+    config: UIConfig,
+    *,
+    run_folder: str,
+    walltime: str,
+    total_cycles: int,
+    workflow_id: str,
+) -> IterativeLoopState:
+    state = IterativeLoopState(
+        phase=Phase.QUEUED_ON_NERSC,
+        run_folder=run_folder,
+        walltime=walltime,
+        total_cycles=total_cycles,
+        current_cycle=1,
+        last_completed_cycle=0,
+        error=None,
+        status_message="Submitting Slurm dependency chain on NERSC…",
+        workflow_id=workflow_id,
+        execution_mode="batch",
+        nersc_workflow_status="QUEUED",
+        interactive_launch_started=False,
+        stop_requested=False,
+    )
+    state.touch()
+    save_state(config, state)
+    return state
+
+
 def begin_workflow(
     config: UIConfig,
     *,
@@ -132,6 +166,22 @@ def request_stop(config: UIConfig) -> IterativeLoopState:
     from blast_lib.remote import RemoteError, ssh_exec
 
     state = load_state(config)
+    if state.execution_mode == "batch" and state.run_folder:
+        from blast_lib.iterative_loop.batch_submit_agent import cancel_remote_workflow
+
+        try:
+            cancel_remote_workflow(config, state.run_folder)
+        except RemoteError:
+            pass
+        state.touch(
+            phase=Phase.STOPPED,
+            status_message="Stop requested — scancel sent for NERSC workflow jobs.",
+            stop_requested=True,
+            nersc_workflow_status="STOPPED",
+        )
+        save_state(config, state)
+        return state
+
     if state.phase == Phase.RUNNING_INTERACTIVE:
         state.stop_requested = True
         cancel_msg = ""

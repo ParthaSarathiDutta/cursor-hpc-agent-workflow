@@ -48,6 +48,12 @@ class UIConfig:
     salloc_qos: str = "interactive"
     batch_slurm_script: str = "slurm/agenticblast_runBOP.slurm"
     batch_slurm_remote_name: str = "agenticblast_runBOP.slurm"
+    loop_gpu_slurm_script: str = "slurm/agenticblast_loop_gpu.slurm"
+    loop_gpu_slurm_remote_name: str = "agenticblast_loop_gpu.slurm"
+    loop_range_slurm_script: str = "slurm/agenticblast_loop_range.slurm"
+    loop_range_slurm_remote_name: str = "agenticblast_loop_range.slurm"
+    range_qos: str = "shared"
+    range_time: str = "01:00:00"
     batch_qos: str = "regular"
     batch_time: str = "04:00:00"
     batch_nodes: int = 2

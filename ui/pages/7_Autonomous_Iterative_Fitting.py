@@ -1,8 +1,7 @@
-"""Autonomous iterative fitting — single folder, interactive salloc cycles."""
+"""Autonomous iterative fitting — NERSC batch Slurm dependency chain."""
 
 from __future__ import annotations
 
-import subprocess
 import sys
 from pathlib import Path
 
@@ -14,15 +13,15 @@ import streamlit as st
 from blast_lib.agenticblast_submit import SubmitPathError, list_blast_run_dirs, normalize_run_path
 from blast_lib.config import load_config
 from blast_lib.iterative_loop.controller import IterativeRunController, is_workflow_active
-from blast_lib.iterative_loop.state import begin_workflow, load_state, request_stop
+from blast_lib.iterative_loop.state import load_state, request_stop
 from blast_lib.remote import ssh_ping
-
-ROOT = Path(__file__).resolve().parents[2]
-RUNNER_SCRIPT = ROOT / "scripts" / "iterative-loop-dev.sh"
 
 config = load_config()
 st.title("Autonomous Iterative Fitting")
-st.caption("Single run folder · interactive salloc + RunBOP · changemodel.json.py between cycles")
+st.caption(
+    "Single run folder · Slurm batch GPU + Range jobs on NERSC · "
+    "changemodel.json.py between cycles · Mac not required after Start"
+)
 
 ssh_ok, ssh_msg = ssh_ping(config, timeout=15)
 if not ssh_ok:
@@ -31,11 +30,12 @@ if not ssh_ok:
 state = load_state(config)
 active = is_workflow_active(state)
 
-# String keys — safe when Streamlit still has a pre-RUNNING_INTERACTIVE Phase enum cached.
 PHASE_LABELS: dict[str, str] = {
     "IDLE": "Idle.",
-    "SUBMITTING": "Preparing input.txt…",
-    "RUNNING_INTERACTIVE": "Interactive salloc + RunBOP running…",
+    "SUBMITTING": "Preparing…",
+    "QUEUED_ON_NERSC": "Queued on NERSC (Slurm chain submitted).",
+    "RUNNING_ON_NERSC": "Running on NERSC (GPU / Range jobs).",
+    "RUNNING_INTERACTIVE": "Interactive salloc + RunBOP (legacy).",
     "WAITING_FOR_JOB": "Waiting for Slurm job…",
     "ANALYZING_BEST_SET": "Finding best set…",
     "UPDATING_RANGES": "Updating parameter ranges…",
@@ -46,20 +46,17 @@ PHASE_LABELS: dict[str, str] = {
 }
 TERMINAL_PHASE_VALUES = frozenset({"IDLE", "COMPLETED", "FAILED", "STOPPED"})
 
-def _ensure_runner_started() -> None:
-    if not RUNNER_SCRIPT.is_file():
-        st.warning("Missing scripts/iterative-loop-dev.sh")
-        return
-    subprocess.run(["bash", str(RUNNER_SCRIPT), "start"], cwd=ROOT, check=False)
-
-
 col_a, col_b = st.columns(2)
 with col_a:
     if st.button("Refresh status"):
-        IterativeRunController(config).tick()
+        folder = state.run_folder
+        if folder:
+            IterativeRunController(config).sync_from_remote(folder)
+        else:
+            IterativeRunController(config).tick()
         st.rerun()
 with col_b:
-    st.caption(f"Runner `{RUNNER_SCRIPT.name} start` keeps the loop alive when this tab is closed.")
+    st.caption("Refresh pulls `<run_folder>/.agentic_loop/workflow.json` from Perlmutter.")
 
 st.divider()
 st.subheader("Status")
@@ -80,20 +77,20 @@ with c2:
 with c3:
     st.metric("Phase", state.phase)
 
+if state.execution_mode:
+    st.caption(f"Execution mode: **{state.execution_mode}**")
+if state.nersc_workflow_status:
+    st.caption(f"NERSC workflow status: **{state.nersc_workflow_status}**")
+
 st.write("**Current phase:**", PHASE_LABELS.get(state.phase, state.phase))
 if state.status_message:
     st.info(state.status_message)
 if state.stop_requested:
-    st.warning(
-        "Stop requested — no further cycles will start. "
-        "If an interactive allocation is still running, it finishes unless scancel succeeded."
-    )
+    st.warning("Stop requested — pending Slurm jobs were cancelled where possible.")
 if state.active_job_id:
-    st.write(f"**Allocation / job ID:** `{state.active_job_id}`")
-if state.slurm_state:
-    st.write(f"**Slurm state:** {state.slurm_state}")
-if state.last_launch_returncode is not None:
-    st.write(f"**Last interactive SSH exit code:** {state.last_launch_returncode}")
+    st.write(f"**Active Slurm job ID (last seen):** `{state.active_job_id}`")
+if state.run_folder:
+    st.caption(f"Authoritative state: `{state.run_folder.rstrip('/')}/.agentic_loop/workflow.json`")
 if state.last_completed_cycle:
     st.write(f"**Last completed cycle:** {state.last_completed_cycle}")
 if state.last_best_score is not None:
@@ -102,19 +99,8 @@ if state.last_best_iteration is not None:
     st.write(f"**Last best iteration:** {state.last_best_iteration}")
 if state.last_range_update:
     st.write(f"**Last range update:** {state.last_range_update}")
-if state.scored_trial_count_before is not None:
-    st.caption(
-        f"Scored trials this cycle: before={state.scored_trial_count_before}, "
-        f"after={state.scored_trial_count_after}"
-    )
 if state.error:
     st.error(state.error)
-
-if state.phase == "RUNNING_INTERACTIVE":
-    st.caption(
-        "Runner holds SSH for this allocation. When it ends and ho.report gains new trials, "
-        "RangeAgent updates ranges."
-    )
 
 st.divider()
 st.subheader("Start workflow")
@@ -129,8 +115,8 @@ else:
 
     folder_default = state.run_folder or (remote_dirs[0] if remote_dirs else "ML-Tersoff-1_PE")
     run_folder = st.text_input("Run folder (name or absolute path)", value=folder_default)
-    walltime = st.text_input("Time per run (HH:MM:SS)", value=state.walltime or "00:10:00")
-    total_cycles = st.number_input("Number of runs", min_value=1, max_value=50, value=3)
+    walltime = st.text_input("GPU time per cycle (HH:MM:SS)", value=state.walltime or "04:00:00")
+    total_cycles = st.number_input("Number of cycles", min_value=1, max_value=50, value=3)
 
     if st.button("Start", type="primary", disabled=not ssh_ok):
         try:
@@ -138,15 +124,15 @@ else:
         except SubmitPathError as exc:
             st.error(str(exc))
         else:
-            begin_workflow(
-                config,
-                run_folder=path,
-                walltime=walltime.strip(),
-                total_cycles=int(total_cycles),
-            )
-            _ensure_runner_started()
-            IterativeRunController(config).tick()
-            st.success("Workflow started. Runner will continue in the background.")
+            ctrl = IterativeRunController(config)
+            result = ctrl.submit_batch_workflow(path, walltime.strip(), int(total_cycles))
+            if result.phase == "FAILED":
+                st.error(result.error or "Submit failed.")
+            else:
+                st.success(
+                    "Slurm dependency chain submitted on NERSC. "
+                    "You can close this Mac; use Refresh to reconnect."
+                )
             st.rerun()
 
 if active or state.phase not in ("IDLE", "COMPLETED"):
@@ -155,4 +141,4 @@ if active or state.phase not in ("IDLE", "COMPLETED"):
         st.rerun()
 
 st.divider()
-st.caption("See docs/autonomous-iterative-loop.md. Uses changemodel.json.py (not startmodel.py).")
+st.caption("See docs/autonomous-iterative-loop.md. GPU→Range: afterany; Range→next GPU: afterok.")

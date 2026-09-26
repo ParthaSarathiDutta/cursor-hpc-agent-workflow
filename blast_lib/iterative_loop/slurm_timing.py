@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 
 from blast_lib.config_types import UIConfig
 from blast_lib.remote import RemoteError, ssh_exec
@@ -47,6 +48,27 @@ def parse_sacct_elapsed_seconds(elapsed: str) -> int:
     mi = int(m.group("mins"))
     s = int(m.group("secs"))
     return days * 86400 + h * 3600 + mi * 60 + s
+
+
+def fetch_job_elapsed_seconds_local(job_id: str) -> int | None:
+    """Query sacct on the local node (Perlmutter batch/login). No SSH."""
+    jid = job_id.strip()
+    if not jid.isdigit():
+        return None
+    cmd = ["sacct", "-j", jid, "-X", "--format=Elapsed", "-P", "-n"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode != 0:
+        return None
+    out = (result.stdout or "").strip()
+    if not out:
+        return None
+    try:
+        return parse_sacct_elapsed_seconds(out.splitlines()[0].strip())
+    except ValueError:
+        return None
 
 
 def fetch_job_elapsed_seconds(config: UIConfig, job_id: str) -> int | None:

@@ -5,8 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from blast_lib.config_types import UIConfig
-from blast_lib.metrics import scored_trials, top_k_trials
-from blast_lib.parser import parse_ho_report
+from blast_lib.iterative_loop.ho_report_local import best_trial_from_report, count_scored_trials
 from blast_lib.remote import sync_run_at_path
 from blast_lib.run_catalog import find_report_path
 
@@ -19,14 +18,4 @@ def sync_and_report_path(config: UIConfig, run_folder_path: str) -> Path:
     return rp
 
 
-def count_scored_trials(report_path: Path) -> int:
-    trials = parse_ho_report(report_path)
-    return len(scored_trials(trials))
-
-
-def best_trial_from_report(report_path: Path) -> dict:
-    trials = parse_ho_report(report_path)
-    top = top_k_trials(trials, k=1)
-    if not top:
-        raise ValueError("No scored trials in ho.report")
-    return top[0]
+__all__ = ["sync_and_report_path", "count_scored_trials", "best_trial_from_report"]

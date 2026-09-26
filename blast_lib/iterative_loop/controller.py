@@ -5,14 +5,17 @@ from __future__ import annotations
 from blast_lib.config_types import UIConfig
 from blast_lib.iterative_loop.ho_report_utils import count_scored_trials, sync_and_report_path
 from blast_lib.iterative_loop.range_agent import RangeAgent
+from blast_lib.iterative_loop.batch_submit_agent import BatchSubmitAgent
+from blast_lib.iterative_loop.remote_sync import mirror_remote_to_local
+from blast_lib.iterative_loop.slurm_timing import allocation_met_walltime, fetch_job_elapsed_seconds
 from blast_lib.iterative_loop.state import (
     ACTIVE_PHASES,
     IterativeLoopState,
     Phase,
+    begin_batch_workflow,
     load_state,
     save_state,
 )
-from blast_lib.iterative_loop.slurm_timing import allocation_met_walltime, fetch_job_elapsed_seconds
 from blast_lib.iterative_loop.submit_agent import InteractiveSubmitResult, SubmitAgent
 from blast_lib.remote import RemoteError
 
@@ -28,11 +31,48 @@ class IterativeRunController:
         self.config = config
         self.submit_agent = submit_agent or SubmitAgent(config)
         self.range_agent = range_agent or RangeAgent(config)
+        self.batch_submit_agent = BatchSubmitAgent(config)
+
+    def submit_batch_workflow(
+        self,
+        run_folder: str,
+        walltime: str,
+        total_cycles: int,
+    ) -> IterativeLoopState:
+        result = self.batch_submit_agent.submit(
+            run_folder,
+            walltime=walltime,
+            total_cycles=total_cycles,
+        )
+        if not result.ok:
+            state = load_state(self.config)
+            return self._fail(state, result.message)
+        begin_batch_workflow(
+            self.config,
+            run_folder=run_folder,
+            walltime=walltime,
+            total_cycles=total_cycles,
+            workflow_id=result.workflow_id or "",
+        )
+        return mirror_remote_to_local(self.config, run_folder)
+
+    def sync_from_remote(self, run_folder: str | None = None) -> IterativeLoopState:
+        state = load_state(self.config)
+        folder = run_folder or state.run_folder
+        if not folder:
+            return state
+        return mirror_remote_to_local(self.config, folder)
 
     def tick(self) -> IterativeLoopState:
         state = load_state(self.config)
         if state.phase in (Phase.IDLE, Phase.COMPLETED, Phase.FAILED, Phase.STOPPED):
             return state
+
+        if state.execution_mode == "batch" and state.phase in (
+            Phase.QUEUED_ON_NERSC,
+            Phase.RUNNING_ON_NERSC,
+        ):
+            return self.sync_from_remote()
 
         if state.phase == Phase.RUNNING_INTERACTIVE and state.interactive_launch_started:
             return self.fail_stale_interactive_launch(state)

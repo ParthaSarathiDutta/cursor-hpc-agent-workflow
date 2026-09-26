@@ -1,55 +1,91 @@
 # Autonomous iterative fitting loop
 
-Single BLAST run folder, repeated **interactive salloc + RunBOP** cycles with **changemodel.json.py** between allocations.
+Single BLAST run folder, repeated **GPU RunBOP** cycles with **Range** (changemodel + `mcts_restart.tersoff`) between cycles.
 
-## Components
+## Architecture (current — NERSC batch)
 
 | Piece | Role |
 |-------|------|
-| **SubmitAgent** | `input.txt` + blocking **`salloc` → Step B / parallel RunBOP.py** (same as Submit Next Job interactive) |
-| **RangeAgent** | Sync `ho.report`, best trial (`top_k_trials`), remote `changemodel.json.py`, update `mcts_restart.tersoff` |
-| **IterativeRunController** | State machine; state in `.cursor/status/iterative_loop.json` |
-| **Runner** | `./scripts/iterative-loop-dev.sh start` — holds SSH during each allocation; polls between cycles |
+| **BatchSubmitAgent** | One SSH session: deploy scripts, write `input.txt`, init `<run_folder>/.agentic_loop/workflow.json`, run `submit_chain.sh` (`sbatch --parsable` chain) |
+| **GPU job** | Batch RunBOP (`agenticblast_loop_gpu.slurm` + `scripts/agentic_loop_gpu.py`); records `cycle_N_before.json` |
+| **Range job** | CPU shared job (`agenticblast_loop_range.slurm` + `scripts/agentic_loop_range.py`); local `range_core` — no SSH |
+| **Dashboard** | Start submits chain; **Refresh** mirrors NERSC `workflow.json` to `.cursor/status/iterative_loop.json` |
 
-**No batch sbatch** in this loop (`run_batch_submit` is not used).
+**Mac is not required after Start.** No long-lived SSH, no `salloc`, no background runner for batch mode.
 
-## Agentic vs deterministic
+### Slurm dependencies (N cycles)
 
-| Layer | Agentic? | What it does |
-|-------|----------|--------------|
-| **Agent Chat** (`blast_lib/agent_chat.py`) | Yes — **Gemini** + function calling | Reads synced `ho.report` via `blast_lib/agent_tools.py`; can read/write `input.txt` and preview salloc commands; does not launch GPU jobs from chat. |
-| **SubmitAgent / RangeAgent** | No — fixed rules | SubmitAgent: interactive `salloc` + RunBOP. RangeAgent: best trial = lowest `finalObj`, `changemodel.json.py`, `mcts_restart.tersoff`. Names reserved for future LLM policy. |
-| **IterativeRunController + runner** | No — state machine | Phases in `.cursor/status/iterative_loop.json`; `./scripts/iterative-loop-dev.sh`. |
-| **Cursor hooks + Agent Activity page** | N/A | Shows **Cursor IDE** agent status (`.cursor/hooks.json`), not Gemini or the iterative loop. |
+For each cycle `i`:
 
-Dashboard **Strategy** column on runs is a folder-name heuristic (`run_catalog`), not an LLM.
+1. **GPU** `i` — depends on **Range** `i-1` with `--dependency=afterok:` (cycle 1 has no dependency).
+2. **Range** `i` — depends on **GPU** `i` with `--dependency=afterany:`.
 
-## UI
+Example (3 cycles):
 
-**Autonomous Iterative Fitting**: folder, walltime, number of runs → **Start**. **Stop** sets `stop_requested` during an interactive run (will not start another cycle; tries `scancel` on the allocation id when known).
+```
+gpu1 → range1(afterany gpu1) → gpu2(afterok range1) → range2(afterany gpu2) → gpu3(afterok range2) → range3(afterany gpu3)
+```
 
-## Job completion (strict)
+| Edge | Dependency | Why |
+|------|------------|-----|
+| GPU → Range | `afterany` | GPU may end at walltime (`TIMEOUT`); Range still validates science |
+| Range → next GPU | `afterok` | Next GPU only if Range passed trials + walltime + changemodel |
 
-When the SSH interactive session ends, a cycle counts as **complete** only if all of:
+### Range validation (unchanged science)
 
-1. **Walltime:** `sacct` **Elapsed** for the allocation job id is at least the requested walltime (`state.walltime`, e.g. `00:02:00`), allowing **5 seconds** slack for startup/teardown.
-2. **Fitting progress:** synced `ho.report` **scored trial count increased** vs before that allocation.
+1. `sacct` Elapsed for the GPU job ≥ requested walltime − **5 s** slack  
+2. Scored trial count in `reports/ho.report` **increased** vs `cycle_N_before.json`  
+3. Best trial = minimum `finalObj` (same as dashboard `top_k_trials(..., k=1)`)  
+4. `changemodel.json.py` with extracted Tersoff parameters  
+5. Update `mcts_restart.tersoff` (preserve prefix e.g. `Sb Sb Sb 1`)
 
-Slurm `FAILED` / SSH exit code **1** alone does **not** fail a cycle if the above pass (e.g. time limit). Short allocations (early Step B exit) **fail** even if a few trials were added.
+On failure, Range exits non-zero → next GPU never becomes eligible (`afterok`).
 
-## Recovery
+### Authoritative state (NERSC)
 
-If the runner dies while `RUNNING_INTERACTIVE` and `interactive_launch_started=true`, the workflow **FAILs** on restart (no automatic second salloc). Check `squeue --me`, then reset state before restarting.
+`<run_folder>/.agentic_loop/`:
 
-## Manual commands
+- `workflow.json` — status (`QUEUED` / `RUNNING` / `COMPLETED` / `FAILED` / `CANCELLED`), cycles, job ids, scores  
+- `cycle_N_before.json`, `cycle_N_range_result.json`  
+- `logs/gpu_cN_*.out`, `logs/range_cN_*.out`  
+- `submit_chain.sh` — generated submit script (audit)
+
+Dashboard **Refresh** reads `workflow.json` over SSH (mirror only).
+
+### GPU resources
+
+Reuses **batch** settings from config: `batch_nodes`, `batch_gpus`, `batch_qos`, `submit_account`, etc.  
+Per-cycle walltime = user **GPU time per cycle** (`HH:MM:SS`).
+
+Range jobs: `range_qos` (default `shared`), `range_time` (default `01:00:00`).
+
+### Inspect / stop on Perlmutter
 
 ```bash
-./scripts/iterative-loop-dev.sh start
-./scripts/iterative-loop-dev.sh status
-./scripts/iterative-loop-dev.sh stop
-./scripts/iterative-loop-dev.sh logs
+squeue --me
+sacct -j <jobid> -X --format=JobID,JobName,State,Elapsed,ExitCode -P
+cat <run_folder>/.agentic_loop/workflow.json
+```
+
+**Stop (dashboard or code):** `scancel` on job ids recorded in `workflow.json`; status → `CANCELLED`.
+
+---
+
+## Legacy: interactive `salloc` (Mac-tethered)
+
+Previous design: **SubmitAgent** blocking `salloc` + runner `./scripts/iterative-loop-dev.sh start|chain`.  
+State machine in `IterativeRunController` + `.cursor/status/iterative_loop.json`.  
+Still available in code for development (`runner --chain`); **UI Start uses batch mode**.
+
+---
+
+## Tests (local, no NERSC)
+
+```bash
+pytest tests/test_batch_chain.py tests/test_range_core.py tests/test_remote_workflow.py \
+  tests/test_iterative_controller.py tests/test_range_agent.py
 ```
 
 ## Config
 
-`iterative_loop_state_path`, `iterative_loop_poll_sec`, plus the same `salloc_*` / `submit_account` / `blast_python` fields as **Submit Next Job**.
+`loop_gpu_slurm_script`, `loop_range_slurm_script`, `range_qos`, `range_time`, plus existing `batch_*` and `blast_python` fields.
