@@ -40,7 +40,7 @@ def build_interactive_runbop_shell(
     *,
     step_b: str,
 ) -> str:
-    """cd blast_root && salloc ... -- bash -c 'step_b'."""
+    """cd blast_root && salloc ... -- bash -c 'step_b' (Step B on compute nodes)."""
     root = settings.blast_root.rstrip("/")
     inner = step_b.strip()
     if not inner:

@@ -80,9 +80,11 @@ def orchestrator_harness(tmp_path: Path):
     range_calls: list[int] = []
     trials = {"n": 10}
 
-    def run_shell(cmd: str, env: dict) -> SallocRunResult:
+    def run_shell(cmd: str, env: dict, on_salloc_granted=None) -> SallocRunResult:
         assert not any(k.startswith("SLURM_") for k in env)
         salloc_calls.append(cmd)
+        if on_salloc_granted:
+            on_salloc_granted("90001")
         return SallocRunResult(
             returncode=0,
             combined_output="Granted job allocation 90001",
@@ -152,7 +154,7 @@ def test_salloc_failure_does_not_advance_cycle(tmp_path: Path):
     save_workflow(path, wf)
     attempts = {"n": 0}
 
-    def fail_shell(cmd, env):
+    def fail_shell(cmd, env, on_salloc_granted=None):
         attempts["n"] += 1
         return SallocRunResult(returncode=1, combined_output="denied", job_id=None)
 
@@ -180,11 +182,13 @@ def test_only_one_salloc_at_a_time_logical(orchestrator_harness):
     in_flight = {"active": False}
     calls: list[str] = []
 
-    def tracked_shell(cmd, env):
+    def tracked_shell(cmd, env, on_salloc_granted=None):
         assert in_flight["active"] is False
         in_flight["active"] = True
         calls.append(cmd)
         try:
+            if on_salloc_granted:
+                on_salloc_granted("42")
             return SallocRunResult(0, "Granted job allocation 42", "42")
         finally:
             in_flight["active"] = False
@@ -192,6 +196,52 @@ def test_only_one_salloc_at_a_time_logical(orchestrator_harness):
     hooks.run_shell = tracked_shell
     run_orchestrator(path, step_b="x", hooks=hooks)
     assert len(calls) == 2
+
+
+def test_salloc_granted_callback_writes_job_id_before_run_finishes(tmp_path: Path):
+    wf = _wf(tmp_path, cycles=1)
+    path = workflow_json_path(wf.run_folder)
+    save_workflow(path, wf)
+    seen: list[str] = []
+
+    def run_shell(cmd, env, on_salloc_granted=None):
+        if on_salloc_granted:
+            on_salloc_granted("58917950")
+            mid = load_workflow(path)
+            seen.append(mid.current_interactive_job_id or "")
+            seen.append(mid.cycles[0].gpu_job_id or "")
+        return SallocRunResult(0, "Granted job allocation 58917950\n", "58917950")
+
+    hooks = OrchestratorHooks(
+        run_shell=run_shell,
+        run_range=lambda *a: RangeUpdateResult(
+            ok=True, message="ok", best_score=1.0, best_iteration=1, gpu_elapsed_sec=120
+        ),
+        count_trials=lambda rp: 10,
+        sleep=lambda _: None,
+        load_workflow=load_workflow,
+        save_workflow=save_workflow,
+        env={},
+    )
+    run_orchestrator(path, step_b="echo x", hooks=hooks)
+    assert seen == ["58917950", "58917950"]
+    final = load_workflow(path)
+    assert final.cycles[0].gpu_job_id == "58917950"
+
+
+def test_stream_shell_run_invokes_callback():
+    from blast_lib.iterative_loop.orchestrator_core import stream_shell_run
+
+    script = "printf 'waiting\\n'; echo 'Granted job allocation 77777'; sleep 0"
+    granted: list[str] = []
+    result = stream_shell_run(
+        script,
+        {"PATH": "/usr/bin:/bin", "HOME": "/tmp"},
+        on_salloc_granted=lambda jid: granted.append(jid),
+    )
+    assert result.returncode == 0
+    assert granted == ["77777"]
+    assert result.job_id == "77777"
 
 
 def test_stop_status_aborts(tmp_path: Path):
@@ -207,7 +257,7 @@ def test_stop_status_aborts(tmp_path: Path):
         return loaded
 
     hooks = OrchestratorHooks(
-        run_shell=lambda c, e: SallocRunResult(0, "Granted job allocation 1", "1"),
+        run_shell=lambda c, e, cb=None: SallocRunResult(0, "Granted job allocation 1", "1"),
         run_range=lambda *a: RangeUpdateResult(ok=True, message="ok"),
         count_trials=lambda rp: 1,
         sleep=lambda _: None,

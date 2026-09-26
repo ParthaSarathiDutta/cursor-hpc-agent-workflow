@@ -8,7 +8,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from blast_lib.iterative_loop.ho_report_local import count_scored_trials
 from blast_lib.iterative_loop.range_core import run_range_update_local
@@ -98,11 +98,13 @@ class SallocRunResult:
     job_id: str | None
 
 
+OnSallocGranted = Optional[Callable[[str], None]]
+
 @dataclass
 class OrchestratorHooks:
     """Injected dependencies for tests and the live orchestrator script."""
 
-    run_shell: Callable[[str, dict[str, str]], SallocRunResult]
+    run_shell: Callable[[str, dict[str, str], OnSallocGranted], SallocRunResult]
     run_range: Callable[[Path, str, int, str, str], RangeUpdateResult]
     count_trials: Callable[[Path], int]
     sleep: Callable[[float], None]
@@ -180,9 +182,20 @@ def run_one_cycle(
         wf.phase = WorkflowPhase.RUNNING_GPU
         hooks.save_workflow(wf_path, wf)
 
-        result = hooks.run_shell(shell_cmd, child_env)
-        job_id = result.job_id or parse_salloc_job_id(result.combined_output)
-        if job_id:
+        def _on_salloc_granted(job_id: str) -> None:
+            live = hooks.load_workflow(wf_path)
+            live_rec = live.cycle_record(cycle)
+            live_rec.gpu_job_id = job_id
+            live.current_interactive_job_id = job_id
+            live.phase = WorkflowPhase.RUNNING_GPU
+            live.status_message = f"Cycle {cycle}: interactive allocation {job_id} running RunBOP…"
+            hooks.save_workflow(wf_path, live)
+
+        result = hooks.run_shell(shell_cmd, child_env, _on_salloc_granted)
+        wf = hooks.load_workflow(wf_path)
+        rec = wf.cycle_record(cycle)
+        job_id = result.job_id or rec.gpu_job_id or parse_salloc_job_id(result.combined_output)
+        if job_id and not rec.gpu_job_id:
             rec.gpu_job_id = job_id
             wf.current_interactive_job_id = job_id
             hooks.save_workflow(wf_path, wf)
@@ -298,19 +311,50 @@ def run_orchestrator(
     return 0
 
 
-def default_run_shell(cmd: str, env: dict[str, str]) -> SallocRunResult:
-    proc = subprocess.run(
+def stream_shell_run(
+    cmd: str,
+    env: dict[str, str],
+    on_salloc_granted: OnSallocGranted = None,
+) -> SallocRunResult:
+    """
+    Run salloc + Step B with streamed stdout (no capture_output buffer deadlock).
+
+    Calls ``on_salloc_granted`` as soon as Slurm prints ``Granted job allocation …``.
+    """
+    proc = subprocess.Popen(
         ["/bin/bash", "-lc", cmd],
         env=env,
-        capture_output=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         text=True,
+        bufsize=1,
     )
-    combined = (proc.stdout or "") + (proc.stderr or "")
+    chunks: list[str] = []
+    job_id: str | None = None
+    if proc.stdout is None:
+        return SallocRunResult(returncode=1, combined_output="", job_id=None)
+    for line in proc.stdout:
+        chunks.append(line)
+        if on_salloc_granted and job_id is None:
+            match = _SALLOC_JOB_RE.search(line)
+            if match:
+                job_id = match.group(1)
+                on_salloc_granted(job_id)
+    returncode = proc.wait()
+    combined = "".join(chunks)
     return SallocRunResult(
-        returncode=proc.returncode,
+        returncode=returncode,
         combined_output=combined,
-        job_id=parse_salloc_job_id(combined),
+        job_id=job_id or parse_salloc_job_id(combined),
     )
+
+
+def default_run_shell(
+    cmd: str,
+    env: dict[str, str],
+    on_salloc_granted: OnSallocGranted = None,
+) -> SallocRunResult:
+    return stream_shell_run(cmd, env, on_salloc_granted)
 
 
 def default_hooks(env: dict[str, str] | None = None) -> OrchestratorHooks:

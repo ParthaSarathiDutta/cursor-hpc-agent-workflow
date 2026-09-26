@@ -51,7 +51,15 @@ def format_env_setup_command(settings: RunBopLaunchSettings) -> str:
 
 
 def format_parallel_runbop_command(settings: RunBopLaunchSettings) -> str:
-    """Run RunBOP.py for each path in input.txt (inside interactive allocation)."""
+    """
+    Run RunBOP.py for each path in input.txt.
+
+    Intended to run inside ``salloc … -- bash -c '<this command>'`` so the shell
+    executes on the granted GPU allocation (same as dashboard Submit Next Job).
+    RunBOP.py does not call ``srun``; it drives LAMMPS via the blast stack on
+    the allocation node(s). Batch ``agenticblast_runBOP.slurm`` uses the same
+    parallel pattern without an extra ``srun`` wrapper.
+    """
     root = settings.blast_root.rstrip("/")
     py = settings.blast_python
     env = format_env_setup_command(settings)

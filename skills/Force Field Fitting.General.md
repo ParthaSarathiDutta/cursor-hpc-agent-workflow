@@ -116,6 +116,7 @@ polymorphs_ce = list(all_polymorphs[i] for i in [0, 1])
 - **`main1.py` ramtmp + multiprocessing:** spawned workers re-import `main1` with empty `blast.runtime`; if `tmp` already exists as a symlink from the parent, `blast.cmd.ln(shm,'tmp')` raises `FileExistsError`. Fix: if `tmp_dir` is already a symlink, set `blast.runtime['ramtmp']` from its target; else remove stale `tmp` before `ln`. Script: `scripts/patch_main1_ramtmp.py` (apply on each run folder on Perlmutter).
 - **Step B MPI shims on compute:** extend `.env_shim` with symlinks to `libmpi_gnu_91.so.12` and `libmpi_gtl_cuda.so.0` under `/usr/lib/shifter/mpich-2.2` (see `format_env_setup_command`); `sacct` **TIMEOUT** with ~full walltime + new `ho.report` trials is a successful interactive cycle even if `blast.log` still shows occasional `libmpi_gnu_91` lines from worker subprocesses.
 - **Autonomous NERSC loop (current):** UI Start submits one **cron-QOS orchestrator** (`sbatch -q cron`); it runs **sequential** `salloc --qos interactive` + Step B RunBOP, then local **`range_core`** per cycle (at most one GPU allocation at a time). State: `<run_folder>/.agentic_loop/workflow.json`. See `docs/autonomous-iterative-loop.md`.
+- **Orchestrator salloc:** Step B runs as `salloc … -- bash -c '…parallel RunBOP…'` on the **granted allocation** (same as Submit Next Job); stream salloc stdout and persist **`Granted job allocation <id>`** to `workflow.json` immediately for Stop/`scancel`.
 
 ---
 
