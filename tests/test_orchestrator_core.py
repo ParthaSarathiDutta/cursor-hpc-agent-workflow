@@ -80,7 +80,7 @@ def orchestrator_harness(tmp_path: Path):
     range_calls: list[int] = []
     trials = {"n": 10}
 
-    def run_shell(cmd: str, env: dict, on_salloc_granted=None) -> SallocRunResult:
+    def run_shell(cmd: str, env: dict, on_salloc_granted=None, should_abort=None) -> SallocRunResult:
         assert not any(k.startswith("SLURM_") for k in env)
         salloc_calls.append(cmd)
         if on_salloc_granted:
@@ -154,7 +154,7 @@ def test_salloc_failure_does_not_advance_cycle(tmp_path: Path):
     save_workflow(path, wf)
     attempts = {"n": 0}
 
-    def fail_shell(cmd, env, on_salloc_granted=None):
+    def fail_shell(cmd, env, on_salloc_granted=None, should_abort=None):
         attempts["n"] += 1
         return SallocRunResult(returncode=1, combined_output="denied", job_id=None)
 
@@ -182,7 +182,7 @@ def test_only_one_salloc_at_a_time_logical(orchestrator_harness):
     in_flight = {"active": False}
     calls: list[str] = []
 
-    def tracked_shell(cmd, env, on_salloc_granted=None):
+    def tracked_shell(cmd, env, on_salloc_granted=None, should_abort=None):
         assert in_flight["active"] is False
         in_flight["active"] = True
         calls.append(cmd)
@@ -204,7 +204,7 @@ def test_salloc_granted_callback_writes_job_id_before_run_finishes(tmp_path: Pat
     save_workflow(path, wf)
     seen: list[str] = []
 
-    def run_shell(cmd, env, on_salloc_granted=None):
+    def run_shell(cmd, env, on_salloc_granted=None, should_abort=None):
         if on_salloc_granted:
             on_salloc_granted("58917950")
             mid = load_workflow(path)
@@ -242,6 +242,112 @@ def test_stream_shell_run_invokes_callback():
     assert result.returncode == 0
     assert granted == ["77777"]
     assert result.job_id == "77777"
+
+
+def test_stream_shell_run_no_duplicate_grant_callback():
+    import time
+
+    from blast_lib.iterative_loop.orchestrator_core import stream_shell_run
+
+    script = (
+        "echo 'Granted job allocation 111'; "
+        "echo 'Granted job allocation 222'; "
+        "exit 0"
+    )
+    granted: list[str] = []
+    result = stream_shell_run(
+        script,
+        {"PATH": "/usr/bin:/bin", "HOME": "/tmp"},
+        on_salloc_granted=lambda jid: granted.append(jid),
+    )
+    assert result.returncode == 0
+    assert granted == ["111"]
+    assert result.job_id == "111"
+
+
+def test_stream_shell_run_returns_when_slurm_terminal_but_child_hangs(tmp_path):
+    import time
+
+    from blast_lib.iterative_loop.orchestrator_core import stream_shell_run
+
+    script = "echo 'Granted job allocation 88888'; exec sleep 9999"
+    poll_calls = {"n": 0}
+
+    def poll(jid: str):
+        poll_calls["n"] += 1
+        if jid != "88888":
+            return None
+        return "TIMEOUT" if poll_calls["n"] >= 2 else "RUNNING"
+
+    t0 = time.monotonic()
+    result = stream_shell_run(
+        script,
+        {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        on_salloc_granted=lambda _: None,
+        poll_slurm_job_state=poll,
+        poll_interval_sec=0.05,
+        cleanup_grace_sec=1.0,
+        cleanup_kill_timeout_sec=5.0,
+    )
+    assert time.monotonic() - t0 < 25
+    assert result.job_id == "88888"
+    assert result.returncode == 0
+
+
+def test_stream_shell_run_stop_aborts_and_scancels(monkeypatch, tmp_path):
+    from blast_lib.iterative_loop.orchestrator_core import stream_shell_run
+
+    cancelled: list[str] = []
+    monkeypatch.setattr(
+        "blast_lib.iterative_loop.orchestrator_core._scancel_job_local",
+        lambda jid: cancelled.append(jid),
+    )
+
+    polls = {"n": 0}
+
+    def should_abort():
+        polls["n"] += 1
+        return polls["n"] >= 2
+
+    script = "echo 'Granted job allocation 55555'; exec sleep 9999"
+    result = stream_shell_run(
+        script,
+        {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)},
+        should_abort=should_abort,
+        poll_slurm_job_state=lambda _: "RUNNING",
+        poll_interval_sec=0.05,
+        cleanup_grace_sec=1.0,
+        cleanup_kill_timeout_sec=5.0,
+    )
+    assert result.job_id == "55555"
+    assert cancelled == ["55555"]
+    assert result.returncode == 0
+
+
+def test_stream_shell_run_normal_exit_without_slurm_poll():
+    from blast_lib.iterative_loop.orchestrator_core import stream_shell_run
+
+    script = "echo 'Granted job allocation 33333'; echo done; exit 0"
+    result = stream_shell_run(
+        script,
+        {"PATH": "/usr/bin:/bin", "HOME": "/tmp"},
+    )
+    assert result.returncode == 0
+    assert result.job_id == "33333"
+    assert "done" in result.combined_output
+
+
+def test_slurm_state_normalization():
+    from blast_lib.iterative_loop.slurm_job_state import (
+        slurm_state_is_terminal,
+        slurm_state_ok_after_gpu_walltime,
+        normalize_slurm_state,
+    )
+
+    assert normalize_slurm_state("TIMEOUT+") == "TIMEOUT"
+    assert slurm_state_is_terminal("CANCELLED by 96380")
+    assert slurm_state_ok_after_gpu_walltime("TIMEOUT")
+    assert not slurm_state_ok_after_gpu_walltime("FAILED")
 
 
 def test_stop_status_aborts(tmp_path: Path):

@@ -2,12 +2,21 @@
 
 from __future__ import annotations  # Required for Optional[Callable[...]] on Perlmutter 3.8
 
+import os
 import re
+import signal
 import subprocess
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional
+
+from blast_lib.iterative_loop.slurm_job_state import (
+    fetch_sacct_job_state_local,
+    slurm_state_is_terminal,
+    slurm_state_ok_after_gpu_walltime,
+)
 
 from blast_lib.iterative_loop.ho_report_local import count_scored_trials
 from blast_lib.iterative_loop.range_core import run_range_update_local
@@ -98,12 +107,14 @@ class SallocRunResult:
 
 
 OnSallocGranted = Optional[Callable[[str], None]]
+ShouldAbort = Optional[Callable[[], bool]]
+PollSlurmJobState = Callable[[str], Optional[str]]
 
 @dataclass
 class OrchestratorHooks:
     """Injected dependencies for tests and the live orchestrator script."""
 
-    run_shell: Callable[[str, dict[str, str], OnSallocGranted], SallocRunResult]
+    run_shell: Callable[..., SallocRunResult]
     run_range: Callable[[Path, str, int, str, str], RangeUpdateResult]
     count_trials: Callable[[Path], int]
     sleep: Callable[[float], None]
@@ -190,7 +201,15 @@ def run_one_cycle(
             live.status_message = f"Cycle {cycle}: interactive allocation {job_id} running RunBOP…"
             hooks.save_workflow(wf_path, live)
 
-        result = hooks.run_shell(shell_cmd, child_env, _on_salloc_granted)
+        def _should_abort() -> bool:
+            return _stopped(wf_path, wf, hooks)
+
+        result = hooks.run_shell(
+            shell_cmd,
+            child_env,
+            _on_salloc_granted,
+            should_abort=_should_abort,
+        )
         wf = hooks.load_workflow(wf_path)
         rec = wf.cycle_record(cycle)
         job_id = result.job_id or rec.gpu_job_id or parse_salloc_job_id(result.combined_output)
@@ -310,16 +329,66 @@ def run_orchestrator(
     return 0
 
 
+def _terminate_process_tree(
+    proc: subprocess.Popen[str],
+    *,
+    grace_sec: float,
+    kill_timeout_sec: float,
+) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError, OSError):
+        proc.terminate()
+    deadline = time.monotonic() + grace_sec
+    while time.monotonic() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.15)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        proc.kill()
+    try:
+        proc.wait(timeout=kill_timeout_sec)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def _scancel_job_local(job_id: str) -> None:
+    try:
+        subprocess.run(
+            ["scancel", job_id.strip()],
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def stream_shell_run(
     cmd: str,
     env: dict[str, str],
     on_salloc_granted: OnSallocGranted = None,
+    *,
+    should_abort: ShouldAbort = None,
+    poll_slurm_job_state: PollSlurmJobState | None = None,
+    poll_interval_sec: float = 5.0,
+    cleanup_grace_sec: float = 30.0,
+    cleanup_kill_timeout_sec: float = 15.0,
 ) -> SallocRunResult:
     """
     Run salloc + Step B with streamed stdout (no capture_output buffer deadlock).
 
-    Calls ``on_salloc_granted`` as soon as Slurm prints ``Granted job allocation …``.
+    Calls ``on_salloc_granted`` once as soon as Slurm prints ``Granted job allocation …``.
+
+    After the allocation job id is known, polls sacct/squeue independently. When the Slurm
+    allocation reaches a terminal state, reaps stale salloc/bash/parallel children that may
+    still hold stdout open (common after interactive TIMEOUT).
     """
+    poll_fn = poll_slurm_job_state or fetch_sacct_job_state_local
     proc = subprocess.Popen(
         ["/bin/bash", "-lc", cmd],
         env=env,
@@ -327,24 +396,101 @@ def stream_shell_run(
         stderr=subprocess.STDOUT,
         text=True,
         bufsize=1,
+        start_new_session=True,
     )
     chunks: list[str] = []
     job_id: str | None = None
+    granted_called = False
+    slurm_ended = False
+    aborted = False
+    lock = threading.Lock()
+
     if proc.stdout is None:
         return SallocRunResult(returncode=1, combined_output="", job_id=None)
-    for line in proc.stdout:
-        chunks.append(line)
-        if on_salloc_granted and job_id is None:
-            match = _SALLOC_JOB_RE.search(line)
-            if match:
-                job_id = match.group(1)
-                on_salloc_granted(job_id)
-    returncode = proc.wait()
-    combined = "".join(chunks)
+
+    def _reader() -> None:
+        nonlocal job_id, granted_called
+        try:
+            for line in proc.stdout:
+                with lock:
+                    chunks.append(line)
+                if on_salloc_granted and not granted_called:
+                    match = _SALLOC_JOB_RE.search(line)
+                    if match:
+                        with lock:
+                            job_id = match.group(1)
+                            granted_called = True
+                        on_salloc_granted(job_id)
+        finally:
+            try:
+                proc.stdout.close()
+            except OSError:
+                pass
+
+    reader = threading.Thread(target=_reader, name="stream_shell_run_reader", daemon=True)
+    reader.start()
+
+    def _known_job_id() -> str | None:
+        with lock:
+            if job_id:
+                return job_id
+            return parse_salloc_job_id("".join(chunks))
+
+    terminal_slurm_state: str | None = None
+    while proc.poll() is None:
+        active_job = _known_job_id()
+
+        if should_abort and should_abort():
+            aborted = True
+            if active_job:
+                _scancel_job_local(active_job)
+            _terminate_process_tree(
+                proc,
+                grace_sec=cleanup_grace_sec,
+                kill_timeout_sec=cleanup_kill_timeout_sec,
+            )
+            break
+
+        if active_job:
+            state = poll_fn(active_job)
+            if state and slurm_state_is_terminal(state):
+                slurm_ended = True
+                terminal_slurm_state = state
+                _terminate_process_tree(
+                    proc,
+                    grace_sec=cleanup_grace_sec,
+                    kill_timeout_sec=cleanup_kill_timeout_sec,
+                )
+                break
+
+        time.sleep(poll_interval_sec)
+
+    reader.join(timeout=2.0)
+    try:
+        returncode = proc.wait(timeout=cleanup_kill_timeout_sec)
+    except subprocess.TimeoutExpired:
+        _terminate_process_tree(
+            proc,
+            grace_sec=5.0,
+            kill_timeout_sec=cleanup_kill_timeout_sec,
+        )
+        returncode = proc.wait(timeout=cleanup_kill_timeout_sec)
+
+    with lock:
+        combined = "".join(chunks)
+        resolved_job = job_id or parse_salloc_job_id(combined)
+
+    if slurm_ended and terminal_slurm_state and slurm_state_ok_after_gpu_walltime(terminal_slurm_state):
+        returncode = 0
+    elif aborted:
+        returncode = 0
+    elif slurm_ended and terminal_slurm_state and not slurm_state_ok_after_gpu_walltime(terminal_slurm_state):
+        returncode = returncode if returncode else 1
+
     return SallocRunResult(
         returncode=returncode,
         combined_output=combined,
-        job_id=job_id or parse_salloc_job_id(combined),
+        job_id=resolved_job,
     )
 
 
@@ -352,8 +498,9 @@ def default_run_shell(
     cmd: str,
     env: dict[str, str],
     on_salloc_granted: OnSallocGranted = None,
+    should_abort: ShouldAbort = None,
 ) -> SallocRunResult:
-    return stream_shell_run(cmd, env, on_salloc_granted)
+    return stream_shell_run(cmd, env, on_salloc_granted, should_abort=should_abort)
 
 
 def default_hooks(env: dict[str, str] | None = None) -> OrchestratorHooks:
