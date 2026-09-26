@@ -13,6 +13,17 @@ Single BLAST run folder, repeated **interactive salloc + RunBOP** cycles with **
 
 **No batch sbatch** in this loop (`run_batch_submit` is not used).
 
+## Agentic vs deterministic
+
+| Layer | Agentic? | What it does |
+|-------|----------|--------------|
+| **Agent Chat** (`blast_lib/agent_chat.py`) | Yes — **Gemini** + function calling | Reads synced `ho.report` via `blast_lib/agent_tools.py`; can read/write `input.txt` and preview salloc commands; does not launch GPU jobs from chat. |
+| **SubmitAgent / RangeAgent** | No — fixed rules | SubmitAgent: interactive `salloc` + RunBOP. RangeAgent: best trial = lowest `finalObj`, `changemodel.json.py`, `mcts_restart.tersoff`. Names reserved for future LLM policy. |
+| **IterativeRunController + runner** | No — state machine | Phases in `.cursor/status/iterative_loop.json`; `./scripts/iterative-loop-dev.sh`. |
+| **Cursor hooks + Agent Activity page** | N/A | Shows **Cursor IDE** agent status (`.cursor/hooks.json`), not Gemini or the iterative loop. |
+
+Dashboard **Strategy** column on runs is a folder-name heuristic (`run_catalog`), not an LLM.
+
 ## UI
 
 **Autonomous Iterative Fitting**: folder, walltime, number of runs → **Start**. **Stop** sets `stop_requested` during an interactive run (will not start another cycle; tries `scancel` on the allocation id when known).

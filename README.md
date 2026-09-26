@@ -2,6 +2,10 @@
 
 Agent-assisted development workflow for scientific computing on NERSC Perlmutter — **Cursor Remote SSH**, **Slurm** job orchestration, and HPC-aware agent rules for BLAST force-field workflows.
 
+**Latest development:** autonomous iterative fitting, Agent Chat (Gemini), and extended dashboard live on branch **`feature/autonomous-iterative-loop`**. Clone that branch (or `git pull` it) for an accurate picture; default **`main`** is behind until merged.
+
+See [docs/autonomous-iterative-loop.md](docs/autonomous-iterative-loop.md) and [CLAUDE.md](CLAUDE.md) for architecture handoff to coding agents.
+
 ## Quick start
 
 ### 1. SSH (once per day)
