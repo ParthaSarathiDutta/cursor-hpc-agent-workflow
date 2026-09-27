@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import MISSING, asdict, dataclass
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
@@ -64,7 +64,7 @@ class IterativeLoopState:
     last_launch_returncode: int | None = None
     last_slurm_elapsed_sec: int | None = None
     stop_requested: bool = False
-    execution_mode: str = "interactive"  # interactive | batch
+    execution_mode: str = "interactive"  # interactive | batch | orchestrator
     nersc_workflow_status: str | None = None
 
     def remaining_cycles(self) -> int:
@@ -88,12 +88,21 @@ def _state_path(config: UIConfig) -> Path:
 
 
 def load_state(config: UIConfig) -> IterativeLoopState:
+    """Load Mac-side mirror state; apply dataclass defaults for any missing keys."""
     path = _state_path(config)
     if not path.is_file():
         return IterativeLoopState()
     raw = json.loads(path.read_text())
     fields = IterativeLoopState.__dataclass_fields__
-    return IterativeLoopState(**{k: v for k, v in raw.items() if k in fields})
+    kwargs: dict[str, Any] = {}
+    for name, field in fields.items():
+        if name in raw:
+            kwargs[name] = raw[name]
+        elif field.default is not MISSING:
+            kwargs[name] = field.default
+        elif field.default_factory is not MISSING:
+            kwargs[name] = field.default_factory()
+    return IterativeLoopState(**kwargs)
 
 
 def save_state(config: UIConfig, state: IterativeLoopState) -> None:
@@ -196,9 +205,10 @@ def request_stop(config: UIConfig) -> IterativeLoopState:
     from blast_lib.remote import RemoteError, ssh_exec
 
     state = load_state(config)
-    if state.run_folder and state.execution_mode in ("batch", "orchestrator"):
+    mode = getattr(state, "execution_mode", "interactive")
+    if state.run_folder and mode in ("batch", "orchestrator"):
         try:
-            if state.execution_mode == "orchestrator":
+            if mode == "orchestrator":
                 from blast_lib.iterative_loop.orchestrator_submit_agent import cancel_orchestrator_workflow
 
                 cancel_orchestrator_workflow(config, state.run_folder)

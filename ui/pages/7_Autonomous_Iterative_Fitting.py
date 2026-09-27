@@ -77,10 +77,12 @@ with c2:
 with c3:
     st.metric("Phase", state.phase)
 
-if state.execution_mode:
-    st.caption(f"Execution mode: **{state.execution_mode}**")
-if state.nersc_workflow_status:
-    st.caption(f"NERSC workflow status: **{state.nersc_workflow_status}**")
+_execution_mode = getattr(state, "execution_mode", None)
+_nersc_status = getattr(state, "nersc_workflow_status", None)
+if _execution_mode:
+    st.caption(f"Execution mode: **{_execution_mode}**")
+if _nersc_status:
+    st.caption(f"NERSC workflow status: **{_nersc_status}**")
 
 st.write("**Current phase:**", PHASE_LABELS.get(state.phase, state.phase))
 if state.status_message:
