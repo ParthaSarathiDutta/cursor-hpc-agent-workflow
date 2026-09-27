@@ -1,0 +1,198 @@
+---
+description: Perlmutter remote write, Slurm, and process safety for AgenticBLAST (always on)
+alwaysApply: true
+---
+
+# Perlmutter Safety Rules
+
+These rules apply to ALL remote operations on NERSC Perlmutter for this AgenticBLAST project.
+
+## 1. Allowed remote write root
+
+The ONLY Perlmutter directory that may be modified for the current AgenticBLAST project is:
+
+`/global/cfs/cdirs/m4597/partha/AgenticBLAST/`
+
+Writing includes, but is not limited to:
+
+- creating files/directories
+- editing files
+- overwriting files
+- deleting files
+- moving/renaming files
+- copying files into a destination
+- chmod/chown
+- deployment/synchronization
+- generated output
+- temporary files
+- logs
+- state files
+- scripts
+
+Before ANY command that writes to Perlmutter:
+
+1. Resolve/inspect the destination path.
+2. Verify that the destination is underneath:
+
+   `/global/cfs/cdirs/m4597/partha/AgenticBLAST/`
+
+3. If the destination is outside that root:
+   STOP and ask the user for explicit authorization before writing.
+
+Do not infer permission merely because a directory is readable or because the user has access to it.
+
+## 2. BLAST installation is read-only
+
+The following shared BLAST environment/location may be USED or READ:
+
+`/global/cfs/cdirs/m1917/blast_ff/`
+
+but must NEVER be modified.
+
+In particular, do not:
+
+- edit BLAST source/install files
+- install packages into its Python/Conda environment
+- upgrade/downgrade packages
+- modify environment configuration
+- overwrite scripts/binaries
+- chmod/chown its files
+- delete/move anything there
+
+Using an existing executable such as:
+
+`/global/cfs/cdirs/m1917/blast_ff/bin/miniconda3/bin/python`
+
+is allowed.
+
+Modifying that Python environment is NOT allowed.
+
+## 3. Training/reference data is read-only
+
+The training/reference-data area, including:
+
+`/global/cfs/cdirs/m3560/Partha/Training_data/`
+
+must be treated as READ ONLY.
+
+It may be inspected when necessary for:
+
+- scientific targets
+- units
+- metadata
+- validation
+
+but never edited, overwritten, renamed, moved, deleted, or regenerated.
+
+## 4. Other projects are read-only by default
+
+Any Perlmutter directory outside:
+
+`/global/cfs/cdirs/m4597/partha/AgenticBLAST/`
+
+must be treated as read-only unless the user explicitly authorizes an exact additional path.
+
+This includes unrelated projects such as GRPO.
+
+Do not assume that because another path contains "Partha" or belongs to an account accessible by the user that it is safe to modify.
+
+Explicit authorization must be path-specific.
+
+## 5. Slurm safety
+
+Never cancel or kill jobs broadly.
+
+Never use cancellation patterns such as:
+
+- `scancel -u ...`
+- `scancel --user ...`
+- cancellation by QOS
+- cancellation by partition
+- cancellation by job name
+- wildcard/pattern-based cancellation
+- squeue/grep pipelines followed by broad scancel
+- any command that could affect unrelated jobs
+
+For AgenticBLAST workflow cleanup:
+
+- cancel ONLY explicit numeric Slurm job IDs
+- those IDs must be known to belong to the current AgenticBLAST workflow
+- preferably obtain them from that run folder's authoritative workflow state
+
+Never cancel unrelated jobs, including unrelated GRPO jobs.
+
+If ownership of a job ID is uncertain:
+DO NOT CANCEL IT.
+
+## 6. Process safety
+
+Do not kill unrelated processes.
+
+If cleanup of a locally launched remote process is necessary:
+
+- target only the process/process group created by the current AgenticBLAST operation
+- do not use broad pkill/killall patterns
+- do not kill by username
+- do not kill processes from unrelated projects
+
+## 7. System/configuration safety
+
+Do not modify:
+
+- NERSC global configuration
+- shared modules
+- shared software installations
+- shared Conda/Python environments
+- user shell startup files on Perlmutter (for example `.bashrc` / `.bash_profile` / etc.)
+- system files
+- permissions/ownership outside the allowed AgenticBLAST root
+
+Do not perform global or user-level package installations on Perlmutter unless the user explicitly authorizes them.
+
+## 8. Reading outside the write root
+
+Read-only access outside the AgenticBLAST root is allowed when necessary for the task.
+
+Examples:
+
+- inspect training/reference data
+- inspect an existing shared Python executable/environment
+- inspect Slurm job state
+- inspect NERSC-provided information
+- read scientific input/reference files
+
+Read permission does NOT imply write permission.
+
+## 9. Local Mac repository
+
+These Perlmutter restrictions do not automatically prohibit requested edits to the user's LOCAL Cursor repository.
+
+Local source-code changes are allowed when the user explicitly asks for implementation work.
+
+However:
+
+permission to modify local code does NOT imply permission to deploy/write outside the allowed Perlmutter root.
+
+## 10. New remote paths
+
+If future work genuinely requires writing to another Perlmutter directory:
+
+- do NOT assume permission
+- show the exact absolute path to the user
+- explain why writing there is needed
+- wait for explicit approval
+
+After explicit authorization, follow only the scope the user approved.
+
+## 11. Fail-safe rule
+
+When uncertain:
+
+DO NOT WRITE.
+DO NOT DELETE.
+DO NOT CANCEL.
+DO NOT KILL.
+
+Show the exact file path, directory path, process, or Slurm job ID and ask the user before proceeding.
+
+Safety takes precedence over convenience.
