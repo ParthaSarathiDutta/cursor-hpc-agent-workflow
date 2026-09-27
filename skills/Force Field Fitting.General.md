@@ -119,6 +119,7 @@ polymorphs_ce = list(all_polymorphs[i] for i in [0, 1])
 - **Orchestrator salloc:** Step B runs as `salloc … -- bash -c '…parallel RunBOP…'` on the **granted allocation** (same as Submit Next Job); stream salloc stdout and persist **`Granted job allocation <id>`** to `workflow.json` immediately for Stop/`scancel`.
 - **Orchestrator pipe hang:** after interactive **TIMEOUT**, `salloc`/bash/`parallel` on the login node may keep stdout open even though the allocation job ended; poll **`sacct` State** and SIGTERM the salloc process group so the cron orchestrator can reach VALIDATING/Range (do not rely on EOF from `proc.stdout` alone).
 - **Job isolation (Stop/cleanup):** `scancel` only explicit numeric ids from `<run_folder>/.agentic_loop/workflow.json` (`slurm_cancel.py`); never `scancel -u`/QOS/partition or squeue grep; `killpg` only on the orchestrator’s own `Popen(start_new_session=True)` salloc session.
+- **`ho.report` property blocks:** lattice / cohesive_E / elastic stages expose aligned **`| t =`** (target) and **`| p =`** (predicted; ignore `±`); multiline `[…]` vectors and trailing `(N=…)` metadata — parse with `extract_target_pred_block()` in `trial_details.py`. Read-only tables/heatmaps: `blast_lib/result_analysis/` (`ResultAnalysisAgent`), outputs under `<run_folder>/.agentic_loop/analysis/`.
 
 ---
 

@@ -15,6 +15,8 @@ SCORE_LINE_RE = re.compile(r"score:\s*(\w+)\s*(?:\[(.*?)\])?", re.I)
 COMPONENTS_RE = re.compile(r"\+?\s*'([^']+)'")
 POLYMORPH_RE = re.compile(r"(\d+)\.data", re.I)
 ELASTIC_HEADER_RE = re.compile(r"header:\s*(.+)", re.I)
+_FLOAT_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+_HEADER_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z0-9]*$")
 
 FOLDER_PROPERTY_LADDER = "lattice → ce → eos → phonon → elastic"
 
@@ -190,42 +192,139 @@ def parse_property_blocks(stage_lines: list[str]) -> list[dict[str, Any]]:
     return blocks
 
 
-def _elastic_constants(stage_lines: list[str]) -> dict[str, dict[str, float]] | None:
-    header: list[str] = []
-    targets: list[float] = []
-    preds: list[float] = []
-    in_elastic = False
+def _score_block_lines(stage_lines: list[str], score_prefix: str) -> list[str]:
+    """Lines belonging to one score: block (lattice, cohesive_E, elastic, …)."""
+    prefix = score_prefix.lower()
+    block: list[str] = []
+    in_block = False
+
+    def _matches_score_line(lower: str) -> bool:
+        if not lower.startswith("score:"):
+            return False
+        if prefix == "lattice":
+            return "score: lattice" in lower
+        if prefix == "elastic":
+            return "score: elastic" in lower
+        if prefix.startswith("cohesive"):
+            return "cohesive" in lower
+        return prefix in lower
 
     for line in stage_lines:
-        if "score: elastic" in line.lower():
-            in_elastic = True
-            continue
-        if not in_elastic:
-            continue
-        if SCORE_LINE_RE.search(line) and "elastic" not in line.lower():
+        lower = line.lower()
+        if lower.startswith("score:"):
+            if _matches_score_line(lower):
+                in_block = True
+                block = [line]
+                continue
+            if in_block:
+                break
+        elif in_block:
+            block.append(line)
+    return block
+
+
+def _parse_block_headers(block: list[str]) -> list[str]:
+    headers: list[str] = []
+    for line in block:
+        if "| t =" in line or "| p =" in line:
             break
         hm = ELASTIC_HEADER_RE.search(line)
         if hm:
-            header = hm.group(1).split()
+            headers.extend(hm.group(1).split())
             continue
-        if line.strip().startswith("| t ="):
-            targets = [float(x) for x in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", line)]
+        stripped = line.strip()
+        if not stripped.startswith("|"):
             continue
-        if line.strip().startswith("| p ="):
-            preds = [float(x) for x in re.findall(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?", line)]
+        body = stripped.lstrip("|").strip()
+        if not body or body.startswith("+") or body.lower().startswith("return"):
             continue
+        if any(tok in body for tok in ("t =", "p =", "±", "checkpoint", "stage")):
+            continue
+        parts = body.split()
+        if parts and all(_HEADER_TOKEN_RE.match(p) for p in parts):
+            headers.extend(parts)
+    return headers
 
-    if not header or not targets or not preds:
+
+def _parse_block_vector(block: list[str], key: str) -> list[float]:
+    """First ``| key =`` in block; merge continuation lines until ``]`` (arrays) or scalar."""
+    marker = f"| {key} ="
+    other = "| p =" if key == "t" else "| t ="
+    start = None
+    for i, line in enumerate(block):
+        if marker in line:
+            start = i
+            break
+    if start is None:
+        return []
+
+    parts: list[str] = [block[start].split(marker, 1)[1]]
+    is_array = "[" in parts[0]
+    if is_array and "]" not in parts[0]:
+        for line in block[start + 1 :]:
+            if not line.strip().startswith("|"):
+                break
+            if other in line or "| ±" in line:
+                break
+            parts.append(line.lstrip("|"))
+            if "]" in line:
+                break
+
+    blob = " ".join(parts)
+    blob = blob.split("±")[0]
+    blob = blob.split("(")[0]  # drop (N=3) metadata after arrays
+    return [float(x) for x in _FLOAT_RE.findall(blob)]
+
+
+def extract_target_pred_block(stage_lines: list[str], score_prefix: str) -> dict[str, Any]:
+    """
+    Parse target (t) and predicted (p) values from one ho.report score block.
+
+    Returns dict with keys: headers, targets, predicted (lists of equal length).
+    Cohesive energy uses header ['cohesive_energy'].
+    """
+    block = _score_block_lines(stage_lines, score_prefix)
+    if not block:
+        raise ValueError(f"No ho.report score block matching {score_prefix!r}")
+
+    targets = _parse_block_vector(block, "t")
+    predicted = _parse_block_vector(block, "p")
+    if not targets or not predicted:
+        raise ValueError(f"Missing | t = or | p = in score block {score_prefix!r}")
+
+    if score_prefix.lower().startswith("cohesive"):
+        if len(targets) != 1 or len(predicted) != 1:
+            raise ValueError(
+                f"Cohesive block expected scalar t/p, got t={len(targets)} p={len(predicted)}"
+            )
+        return {
+            "headers": ["cohesive_energy"],
+            "targets": targets,
+            "predicted": predicted,
+        }
+
+    headers = _parse_block_headers(block)
+    if not headers:
+        raise ValueError(f"Missing header in score block {score_prefix!r}")
+    if len(headers) != len(targets) or len(headers) != len(predicted):
+        raise ValueError(
+            f"Length mismatch in {score_prefix!r}: header={len(headers)} "
+            f"t={len(targets)} p={len(predicted)}"
+        )
+    return {"headers": headers, "targets": targets, "predicted": predicted}
+
+
+def _elastic_constants(stage_lines: list[str]) -> dict[str, dict[str, float]] | None:
+    try:
+        block = extract_target_pred_block(stage_lines, "elastic")
+    except ValueError:
         return None
-
-    n = min(len(header), len(targets), len(preds))
     out: dict[str, dict[str, float]] = {}
-    for i in range(n):
-        t, p = targets[i], preds[i]
+    for name, t, p in zip(block["headers"], block["targets"], block["predicted"]):
         if t == 0 and p == 0:
             continue
         pct = abs(p - t) / abs(t) * 100 if t else 0.0
-        out[header[i]] = {"target": t, "predicted": p, "error_pct": round(pct, 2)}
+        out[name] = {"target": t, "predicted": p, "error_pct": round(pct, 2)}
     return out or None
 
 
