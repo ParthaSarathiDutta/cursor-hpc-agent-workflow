@@ -72,6 +72,7 @@ class RemoteWorkflow:
     updated_at: str = ""
     error: str | None = None
     status_message: str = ""
+    history_mode: str = ""  # "continue" | "fresh" — set at cycle 1 start when known
     cycles: list[CycleRecord] = field(default_factory=list)
 
     def touch(self, **kwargs: Any) -> None:

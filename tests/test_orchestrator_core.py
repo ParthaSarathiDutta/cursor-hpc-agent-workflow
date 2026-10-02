@@ -29,11 +29,20 @@ from blast_lib.iterative_loop.remote_workflow import (
 from blast_lib.iterative_loop.salloc_command import SallocSettings
 
 
-def _wf(tmp_path: Path, *, cycles: int = 2) -> RemoteWorkflow:
+def _minimal_ho_report(*scores: float) -> str:
+    lines: list[str] = []
+    for i, score in enumerate(scores, start=1):
+        lines.append(f"input Sb-Sb: {i} 2 3 4 5 6 7 8 9 10 11 12 13 14")
+        lines.append(f"# {score} | finalObj | reason")
+    return "\n".join(lines) + "\n"
+
+
+def _wf(tmp_path: Path, *, cycles: int = 2, with_report: bool = True) -> RemoteWorkflow:
     run = tmp_path / "run"
     run.mkdir()
-    (run / "reports").mkdir()
-    (run / "reports" / "ho.report").write_text("dummy\n")
+    if with_report:
+        (run / "reports").mkdir()
+        (run / "reports" / "ho.report").write_text(_minimal_ho_report(100.0))
     return RemoteWorkflow(
         workflow_id="w1",
         run_folder=str(run),
@@ -78,7 +87,7 @@ def orchestrator_harness(tmp_path: Path):
     save_workflow(path, wf)
     salloc_calls: list[str] = []
     range_calls: list[int] = []
-    trials = {"n": 10}
+    trials = {"n": 1}
 
     def run_shell(cmd: str, env: dict, on_salloc_granted=None, should_abort=None) -> SallocRunResult:
         assert not any(k.startswith("SLURM_") for k in env)

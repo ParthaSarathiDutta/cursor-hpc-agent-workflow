@@ -32,7 +32,13 @@ def run_range_update_local(
     run_folder = run_folder.resolve()
     rp = ho_report_path(run_folder)
     if not rp.is_file():
-        return RangeUpdateResult(ok=False, message=f"Missing ho.report at {rp}")
+        return RangeUpdateResult(
+            ok=False,
+            message=(
+                f"Missing ho.report at {rp} after GPU cycle; "
+                "expected RunBOP to create reports/ho.report with scored trials."
+            ),
+        )
 
     elapsed = fetch_job_elapsed_seconds_local(gpu_job_id)
     if elapsed is None:

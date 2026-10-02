@@ -19,7 +19,11 @@ from blast_lib.iterative_loop.slurm_job_state import (
     slurm_state_ok_after_gpu_walltime,
 )
 
-from blast_lib.iterative_loop.ho_report_local import count_scored_trials
+from blast_lib.iterative_loop.ho_report_local import (
+    history_mode_for_cycle_start,
+    require_scored_trials_count,
+    scored_trials_before_cycle,
+)
 from blast_lib.iterative_loop.range_core import run_range_update_local
 from blast_lib.iterative_loop.range_types import RangeUpdateResult
 from blast_lib.iterative_loop.remote_workflow import (
@@ -167,7 +171,19 @@ def run_one_cycle(
         return False, hooks.load_workflow(wf_path)
 
     rp = run_folder / "reports" / "ho.report"
-    before = hooks.count_trials(rp)
+    try:
+        before = scored_trials_before_cycle(rp, cycle=cycle)
+    except FileNotFoundError as exc:
+        wf.status = WorkflowStatus.FAILED
+        wf.phase = WorkflowPhase.FAILED
+        wf.error = str(exc)
+        wf.status_message = str(exc)
+        hooks.save_workflow(wf_path, wf)
+        return False, wf
+
+    mode = history_mode_for_cycle_start(rp, cycle=cycle)
+    if mode:
+        wf.history_mode = mode
     rec.scored_trials_before = before
     write_json_atomic(
         cycle_before_path(run_folder, cycle),
@@ -262,7 +278,17 @@ def run_one_cycle(
         rec.gpu_job_id,
         wf.walltime,
     )
-    after = hooks.count_trials(rp)
+    try:
+        after = require_scored_trials_count(rp)
+    except FileNotFoundError as exc:
+        rec.range_status = "FAILED"
+        rec.error = str(exc)
+        wf.status = WorkflowStatus.FAILED
+        wf.phase = WorkflowPhase.FAILED
+        wf.error = str(exc)
+        wf.status_message = str(exc)
+        hooks.save_workflow(wf_path, wf)
+        return False, wf
     rec.scored_trials_after = after
     rec.last_slurm_elapsed_sec = range_result.gpu_elapsed_sec
     rec.best_score = range_result.best_score
@@ -503,7 +529,7 @@ def default_hooks(env: dict[str, str] | None = None) -> OrchestratorHooks:
         run_range=lambda rf, py, before, jid, wt: run_range_update_local(
             rf, py, scored_before=before, gpu_job_id=jid, walltime=wt
         ),
-        count_trials=lambda rp: count_scored_trials(rp),
+        count_trials=lambda rp: require_scored_trials_count(rp),
         sleep=time.sleep,
         load_workflow=load_workflow,
         save_workflow=save_workflow,

@@ -228,8 +228,15 @@ class IterativeRunController:
 
         folder = state.run_folder
         try:
-            rp = sync_and_report_path(self.config, folder)
-            before = count_scored_trials(rp)
+            if state.current_cycle == 1:
+                try:
+                    rp = sync_and_report_path(self.config, folder)
+                    before = count_scored_trials(rp)
+                except FileNotFoundError:
+                    before = 0
+            else:
+                rp = sync_and_report_path(self.config, folder)
+                before = count_scored_trials(rp)
         except (RemoteError, OSError, FileNotFoundError) as exc:
             return self._fail(state, f"Cannot read ho.report before launch: {exc}")
 
