@@ -1,0 +1,23 @@
+score: phonon
++ 'neg','gap','shape','ceil','gamma'  w = 0.1, 0.3, 0.3, 0.2, 0.2
+| Nneg_t = 0
+| Nneg_p = 0
+| gap_t = 2.338
+| gap_p = 2.266
+| gap_lo_t = 2.05003
+| gap_lo_p = 2.05929
+| band_t band_p:    shape_score  (weight)
+| 0      0     :        130.726  ( 0.267)
+| 1      1     :        133.310  ( 0.267)
+| 2      2     :        109.710  ( 0.267)
+| 3      3     :        584.001  ( 0.067)
+| 4      4     :         47.679  ( 0.067)
+| 5      5     :         47.205  ( 0.067)
+| ceil_t = [ 1.2806  1.6310  2.0505  4.7215  4.7761  6.0012]
+| ceil_p = [ 1.5889  1.7659  2.0604  4.8667  4.9969  5.8675]
+| gamma_t = [-0.0016  0.0012  0.0029  4.7215  4.7215  6.0012]
+| gamma_p = [-0.0144  0.0215  0.0215  4.8667  4.8667  5.8675]
+return {'dp': 3, 'neg.obj': 0.0, 'gap.obj': 10.8, 'gap_lo.obj': 0.1389, 'shape.obj': 43.4774, 'ceil.obj': 3.0829, 'gamma.obj': 0.8421, 'neg.MAE%': 0.0, 'gap.maxAE%': 3.08, 'gap.MAE%': 3.08, 'gap.Npt': 1, 'gap_lo.maxAE%': 0.45, 'gap_lo.MAE%': 0.45, 'gap_lo.Npt': 1, 'ceil.maxAE%': 24.07, 'ceil.MAE%': 9.42, 'ceil.Npt': 6, 'gamma.maxAE%': 1699.97, 'gamma.MAE%': 845.61, 'gamma.Npt': 6}
+236.153464979 | stage 4 |  phonon   1.data (beta)
+checkpoint: 1 constraints
+|    pass   'ceil.maxAE% <= 30.20'  ->  '24.07 <= 30.20'

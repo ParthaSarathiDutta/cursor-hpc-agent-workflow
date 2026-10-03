@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from blast_lib.result_analysis.phonon_parser import PhononStageResult
 
 
 @dataclass
@@ -23,6 +27,7 @@ class SetAnalysisResult:
     properties: list[PropertyResult]
     source_file: str
     input_params: str = ""
+    phonon: PhononStageResult | None = None
 
 
 @dataclass

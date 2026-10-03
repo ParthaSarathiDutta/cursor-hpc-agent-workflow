@@ -9,6 +9,7 @@ from blast_lib.metrics import scored_trials
 from blast_lib.parser import parse_ho_report
 from blast_lib.result_analysis.metrics import absolute_error, percent_error
 from blast_lib.result_analysis.models import PropertyResult, SetAnalysisResult
+from blast_lib.result_analysis.phonon_parser import phonon_from_trial
 from blast_lib.trial_details import extract_target_pred_block
 
 _LATTICE_UNITS = {
@@ -113,6 +114,7 @@ def analyze_trial_record(trial: dict, report_path: Path) -> SetAnalysisResult:
         properties=trial_to_property_rows(trial),
         source_file=str(report_path.resolve()),
         input_params=(trial.get("input_params") or "").strip(),
+        phonon=phonon_from_trial(trial),
     )
 
 

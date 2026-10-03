@@ -13,6 +13,7 @@ from blast_lib.result_analysis.plotting import (
     write_error_heatmap,
 )
 from blast_lib.result_analysis.query_router import parse_query
+from blast_lib.result_analysis.phonon_parser import format_phonon_sections
 from blast_lib.result_analysis.result_parser import (
     analyze_best_from_report,
     analyze_iteration_from_report,
@@ -69,4 +70,6 @@ def format_property_table(result: SetAnalysisResult) -> str:
         lines.append(
             f"{p.property_name} | {p.target} | {p.predicted} | {p.absolute_error} | {pe} | {p.unit}"
         )
+    if result.phonon is not None:
+        lines.append(format_phonon_sections(result.phonon))
     return "\n".join(lines)
