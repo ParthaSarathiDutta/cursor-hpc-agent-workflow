@@ -6,7 +6,14 @@ import shlex
 import subprocess
 from pathlib import Path
 
-from blast_lib.iterative_loop.ho_report_local import best_trial_from_report, count_scored_trials
+from blast_lib.iterative_loop.ho_report_local import (
+    NO_ELASTIC_CANDIDATE,
+    count_elastic_eligible_trials,
+    count_scored_trials,
+    elastic_values_obj_from_trial,
+    select_trial_for_range,
+)
+from blast_lib.iterative_loop.selection_strategy import STRATEGY_ELASTIC, load_selection_strategy
 from blast_lib.iterative_loop.range_types import RangeUpdateResult
 from blast_lib.iterative_loop.tersoff_params import (
     DEFAULT_SB_PREFIX,
@@ -63,9 +70,26 @@ def run_range_update_local(
             message=f"No new scored trials (before={scored_before}, after={after}).",
         )
 
+    strategy = load_selection_strategy(run_folder)
+    if strategy == STRATEGY_ELASTIC and count_elastic_eligible_trials(rp) == 0:
+        return RangeUpdateResult(
+            ok=False,
+            message=(
+                f"{NO_ELASTIC_CANDIDATE}: no elastic-reaching trials with values.obj "
+                f"in {rp} (2-minute sample may be too short)."
+            ),
+            selection_strategy=strategy,
+            selection_reason=NO_ELASTIC_CANDIDATE,
+        )
+
     try:
-        trial = best_trial_from_report(rp)
+        trial = select_trial_for_range(rp, strategy=strategy)
         input_params = trial.get("input_params") or ""
+        elastic_obj = elastic_values_obj_from_trial(trial)
+        if strategy == STRATEGY_ELASTIC:
+            reason = "minimum elastic.values.obj"
+        else:
+            reason = "minimum finalObj"
         param_strings = extract_tersoff_param_strings(input_params)
         param_floats = [float(x) for x in param_strings]
 
@@ -97,6 +121,18 @@ def run_range_update_local(
             best_score=trial.get("score"),
             best_iteration=trial.get("iteration"),
             gpu_elapsed_sec=elapsed,
+            selection_strategy=strategy,
+            selection_reason=reason,
+            elastic_values_obj=elastic_obj,
         )
-    except (ValueError, OSError, subprocess.TimeoutExpired) as exc:
-        return RangeUpdateResult(ok=False, message=str(exc))
+    except ValueError as exc:
+        if str(exc) == NO_ELASTIC_CANDIDATE:
+            return RangeUpdateResult(
+                ok=False,
+                message=f"{NO_ELASTIC_CANDIDATE}: no elastic candidate in {rp}",
+                selection_strategy=strategy,
+                selection_reason=NO_ELASTIC_CANDIDATE,
+            )
+        return RangeUpdateResult(ok=False, message=str(exc), selection_strategy=strategy)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return RangeUpdateResult(ok=False, message=str(exc), selection_strategy=strategy)

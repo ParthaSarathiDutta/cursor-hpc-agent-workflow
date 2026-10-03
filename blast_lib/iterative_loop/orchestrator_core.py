@@ -20,6 +20,7 @@ from blast_lib.iterative_loop.slurm_job_state import (
 )
 
 from blast_lib.iterative_loop.ho_report_local import (
+    NO_ELASTIC_CANDIDATE,
     history_mode_for_cycle_start,
     require_scored_trials_count,
     scored_trials_before_cycle,
@@ -304,10 +305,22 @@ def run_one_cycle(
             "best_score": range_result.best_score,
             "best_iteration": range_result.best_iteration,
             "gpu_elapsed_sec": range_result.gpu_elapsed_sec,
+            "selection_strategy": range_result.selection_strategy,
+            "selection_reason": range_result.selection_reason,
+            "elastic_values_obj": range_result.elastic_values_obj,
         },
     )
 
     if not range_result.ok:
+        if NO_ELASTIC_CANDIDATE in (range_result.message or ""):
+            rec.range_status = "NO_ELASTIC_CANDIDATE"
+            rec.error = range_result.message
+            wf.status = WorkflowStatus.STOPPED
+            wf.phase = WorkflowPhase.STOPPED
+            wf.error = None
+            wf.status_message = range_result.message
+            hooks.save_workflow(wf_path, wf)
+            return False, wf
         rec.range_status = "FAILED"
         rec.error = range_result.message
         wf.status = WorkflowStatus.FAILED

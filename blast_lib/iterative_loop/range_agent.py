@@ -5,7 +5,9 @@ from __future__ import annotations
 import shlex
 from blast_lib.agenticblast_submit import normalize_run_path
 from blast_lib.config_types import UIConfig
-from blast_lib.iterative_loop.ho_report_utils import best_trial_from_report, sync_and_report_path
+from blast_lib.iterative_loop.ho_report_utils import sync_and_report_path
+from blast_lib.iterative_loop.ho_report_local import select_trial_for_range
+from blast_lib.iterative_loop.selection_strategy import load_selection_strategy
 from blast_lib.iterative_loop.tersoff_params import (  # re-exported for tests/callers
     DEFAULT_SB_PREFIX,
     extract_tersoff_floats,
@@ -45,7 +47,10 @@ class RangeAgent:
             else:
                 rp = sync_and_report_path(self.config, folder)
 
-            trial = best_trial_from_report(rp)
+            from pathlib import Path
+
+            strategy = load_selection_strategy(Path(folder))
+            trial = select_trial_for_range(rp, strategy=strategy)
             input_params = trial.get("input_params") or ""
             param_strings = extract_tersoff_param_strings(input_params)
             param_floats = [float(x) for x in param_strings]

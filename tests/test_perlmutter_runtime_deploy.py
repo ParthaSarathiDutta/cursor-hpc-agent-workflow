@@ -9,8 +9,10 @@ from blast_lib.iterative_loop.perlmutter_runtime_files import (
 def test_all_runtime_files_exist():
     paths = list(iter_runtime_files())
     assert len(paths) == len(PERLMUTTER_RUNTIME_REL_PATHS)
+    allowed_remote = {"blast_lib/remote.py", "blast_lib/iterative_loop/remote_workflow.py"}
     for rel, _ in paths:
-        assert "remote" not in rel or rel.endswith("remote_workflow.py")
+        if "remote" in rel:
+            assert rel in allowed_remote
 
 
 def test_runtime_modules_do_not_import_ssh_at_import(monkeypatch):
@@ -37,4 +39,18 @@ def test_runtime_modules_do_not_import_ssh_at_import(monkeypatch):
         importlib.import_module(mod)
 
     # Orchestrator entrypoint (script adds repo root on NERSC; here use package imports)
+    importlib.import_module("scripts.agentic_loop_orchestrator")
+
+
+def test_ho_report_local_import_chain():
+    """Elastic selection pulls trial_details → main1_checkpoints → config (Perlmutter runtime)."""
+    import importlib
+
+    importlib.import_module("blast_lib.iterative_loop.ho_report_local")
+    importlib.import_module("blast_lib.iterative_loop.orchestrator_core")
+
+
+def test_orchestrator_script_import_chain():
+    import importlib
+
     importlib.import_module("scripts.agentic_loop_orchestrator")

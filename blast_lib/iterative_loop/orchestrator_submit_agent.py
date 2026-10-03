@@ -85,7 +85,7 @@ class OrchestratorSubmitAgent:
         cfg = self.config
         root = cfg.blast_root.rstrip("/")
         for rel, local in iter_runtime_files():
-            ssh_write_file(cfg, f"{root}/{rel}", local.read_text())
+            ssh_write_file(cfg, f"{root}/{rel}", local.read_text(), timeout=120)
         orch_slurm = render_orchestrator_slurm(
             cfg,
             log_dir=f"{root}/.agentic_loop/logs",
