@@ -1,0 +1,32 @@
+{
+  "workspace": "/global/cfs/cdirs/m4597/partha/AgenticBLAST/test_runs/property_comparison_3sets",
+  "comparison_subdir": "comparison",
+  "elastic_constants": ["C11", "C22", "C12", "C66"],
+  "potentials": [
+    {
+      "run_dir": "set_A",
+      "label": "Set A",
+      "per_set_csv": "set_A_target_vs_predicted.csv"
+    },
+    {
+      "run_dir": "set_B",
+      "label": "Set B",
+      "per_set_csv": "set_B_target_vs_predicted.csv"
+    },
+    {
+      "run_dir": "set_C",
+      "label": "Set C",
+      "per_set_csv": "set_C_target_vs_predicted.csv"
+    },
+    {
+      "run_dir": "published_ML_Tersoff",
+      "label": "Published ML-Tersoff",
+      "per_set_csv": "published_ML_Tersoff_target_vs_predicted.csv",
+      "fixed_m": "1.0",
+      "parameter_vector": [
+        "1.53800", "3.38350", "121310", "219.679", "-0.0323000", "2.03780",
+        "0.631700", "0.708100", "25.9352", "3.76370", "1.32490", "3.28150", "6077.11"
+      ]
+    }
+  ]
+}
