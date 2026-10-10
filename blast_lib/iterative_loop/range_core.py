@@ -28,6 +28,73 @@ def ho_report_path(run_folder: Path) -> Path:
     return run_folder / "reports" / "ho.report"
 
 
+def apply_recenter_from_trial(
+    run_folder: Path,
+    blast_python: str,
+    trial: dict,
+    *,
+    selection_strategy: str,
+    selection_reason: str | None = None,
+    gpu_elapsed_sec: int | None = None,
+) -> RangeUpdateResult:
+    """Shared ±10% changemodel + mcts_restart update from an explicit trial (RangeAgent path)."""
+    run_folder = run_folder.resolve()
+    try:
+        input_params = trial.get("input_params") or ""
+        elastic_obj = elastic_values_obj_from_trial(trial)
+        if selection_reason is None:
+            if selection_strategy == STRATEGY_ELASTIC:
+                reason = "elastic.values.obj improvement"
+            else:
+                reason = "minimum finalObj"
+        else:
+            reason = selection_reason
+
+        param_strings = extract_tersoff_param_strings(input_params)
+        param_floats = [float(x) for x in param_strings]
+
+        args = " ".join(shlex.quote(s) for s in param_strings)
+        cmd = f"{shlex.quote(blast_python)} changemodel.json.py {args}"
+        proc = subprocess.run(
+            cmd,
+            shell=True,
+            cwd=str(run_folder),
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or "").strip()
+            return RangeUpdateResult(ok=False, message=f"changemodel.json.py failed: {err}")
+
+        restart_path = run_folder / "mcts_restart.tersoff"
+        if restart_path.is_file():
+            prefix, _ = split_mcts_restart_line(restart_path.read_text())
+        else:
+            prefix = DEFAULT_SB_PREFIX
+        restart_path.write_text(format_mcts_restart_line(prefix, param_floats))
+
+        msg = (proc.stdout or "changemodel.json.py completed").strip()
+        return RangeUpdateResult(
+            ok=True,
+            message=msg,
+            best_score=trial.get("score"),
+            best_iteration=trial.get("iteration"),
+            gpu_elapsed_sec=gpu_elapsed_sec,
+            selection_strategy=selection_strategy,
+            selection_reason=reason,
+            elastic_values_obj=elastic_obj,
+        )
+    except ValueError as exc:
+        return RangeUpdateResult(
+            ok=False,
+            message=str(exc),
+            selection_strategy=selection_strategy,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return RangeUpdateResult(ok=False, message=str(exc), selection_strategy=selection_strategy)
+
+
 def run_range_update_local(
     run_folder: Path,
     blast_python: str,
@@ -84,47 +151,19 @@ def run_range_update_local(
 
     try:
         trial = select_trial_for_range(rp, strategy=strategy)
-        input_params = trial.get("input_params") or ""
-        elastic_obj = elastic_values_obj_from_trial(trial)
         if strategy == STRATEGY_ELASTIC:
             reason = "minimum elastic.values.obj"
         else:
             reason = "minimum finalObj"
-        param_strings = extract_tersoff_param_strings(input_params)
-        param_floats = [float(x) for x in param_strings]
-
-        args = " ".join(shlex.quote(s) for s in param_strings)
-        cmd = f"{shlex.quote(blast_python)} changemodel.json.py {args}"
-        proc = subprocess.run(
-            cmd,
-            shell=True,
-            cwd=str(run_folder),
-            capture_output=True,
-            text=True,
-            timeout=600,
-        )
-        if proc.returncode != 0:
-            err = (proc.stderr or proc.stdout or "").strip()
-            return RangeUpdateResult(ok=False, message=f"changemodel.json.py failed: {err}")
-
-        restart_path = run_folder / "mcts_restart.tersoff"
-        if restart_path.is_file():
-            prefix, _ = split_mcts_restart_line(restart_path.read_text())
-        else:
-            prefix = DEFAULT_SB_PREFIX
-        restart_path.write_text(format_mcts_restart_line(prefix, param_floats))
-
-        msg = (proc.stdout or "changemodel.json.py completed").strip()
-        return RangeUpdateResult(
-            ok=True,
-            message=msg,
-            best_score=trial.get("score"),
-            best_iteration=trial.get("iteration"),
-            gpu_elapsed_sec=elapsed,
+        result = apply_recenter_from_trial(
+            run_folder,
+            blast_python,
+            trial,
             selection_strategy=strategy,
             selection_reason=reason,
-            elastic_values_obj=elastic_obj,
+            gpu_elapsed_sec=elapsed,
         )
+        return result
     except ValueError as exc:
         if str(exc) == NO_ELASTIC_CANDIDATE:
             return RangeUpdateResult(

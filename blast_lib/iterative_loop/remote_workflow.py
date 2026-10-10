@@ -74,6 +74,19 @@ class RemoteWorkflow:
     status_message: str = ""
     history_mode: str = ""  # "continue" | "fresh" — set at cycle 1 start when known
     cycles: list[CycleRecord] = field(default_factory=list)
+    # Strategy 3 — elastic + improvement (optional; fixed-cycle workflows omit these)
+    selection_strategy: str = ""
+    recenter_trigger: str = ""
+    improvement_tolerance: float | None = None
+    incumbent_elastic_obj: float | None = None
+    max_regions: int | None = None
+    max_total_runtime_sec: int | None = None
+    region: int = 0
+    region_started_at: str = ""
+    trials_since_region_start: int = 0
+    last_trigger_reason: str = ""
+    last_trigger_iteration: int | None = None
+    workflow_started_monotonic: float | None = None
 
     def touch(self, **kwargs: Any) -> None:
         for key, val in kwargs.items():

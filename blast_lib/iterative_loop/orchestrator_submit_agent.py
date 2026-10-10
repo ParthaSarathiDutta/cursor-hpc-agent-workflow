@@ -10,7 +10,18 @@ import uuid
 from dataclasses import dataclass
 from blast_lib.agenticblast_submit import clear_run_folder_tmp, normalize_run_path, write_input_txt
 from blast_lib.config_types import REPO_ROOT, UIConfig
-from blast_lib.iterative_loop.orchestrator_core import estimate_orchestrator_cron_walltime
+from blast_lib.iterative_loop.orchestrator_core import (
+    estimate_orchestrator_cron_walltime,
+    seconds_to_slurm_time,
+    walltime_hms_to_seconds,
+)
+from blast_lib.iterative_loop.selection_strategy import (
+    StrategyConfig,
+    is_improvement_elastic_strategy,
+    strategy_config_from_dict,
+)
+
+_CRON_WALLTIME_CAP_SEC = 24 * 3600 - 300
 from blast_lib.iterative_loop.perlmutter_runtime_files import iter_runtime_files
 from blast_lib.iterative_loop.remote_workflow import (
     CycleRecord,
@@ -98,6 +109,21 @@ class OrchestratorSubmitAgent:
             timeout=30,
         )
 
+    def _read_remote_strategy_config(self, run_folder: str) -> StrategyConfig | None:
+        path = f"{run_folder.rstrip('/')}/strategy.json"
+        cmd = f"cat {shlex.quote(path)} 2>/dev/null || true"
+        try:
+            raw = ssh_exec(self.config, cmd, timeout=30).strip()
+        except RemoteError:
+            return None
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        return strategy_config_from_dict(data)
+
     def _write_remote_workflow(self, wf: RemoteWorkflow) -> None:
         from dataclasses import asdict
 
@@ -135,11 +161,20 @@ class OrchestratorSubmitAgent:
         cfg = self.config
         wf_id = str(uuid.uuid4())
         gpu_acct = _gpu_account(cfg)
-        cron_wall = estimate_orchestrator_cron_walltime(
-            total_cycles=int(total_cycles),
-            cycle_walltime=walltime.strip(),
-            margin_hours=cfg.orchestrator_cron_margin_hours,
-        )
+        strat = self._read_remote_strategy_config(folder)
+        if strat and is_improvement_elastic_strategy(strat):
+            per = walltime_hms_to_seconds(walltime.strip())
+            if strat.max_total_runtime_sec:
+                need = int(strat.max_total_runtime_sec + cfg.orchestrator_cron_margin_hours * 3600)
+            else:
+                need = int(strat.max_regions * per + cfg.orchestrator_cron_margin_hours * 3600 + 1800)
+            cron_wall = seconds_to_slurm_time(min(need, _CRON_WALLTIME_CAP_SEC))
+        else:
+            cron_wall = estimate_orchestrator_cron_walltime(
+                total_cycles=int(total_cycles),
+                cycle_walltime=walltime.strip(),
+                margin_hours=cfg.orchestrator_cron_margin_hours,
+            )
         wf = RemoteWorkflow(
             workflow_id=wf_id,
             run_folder=folder,
@@ -160,6 +195,14 @@ class OrchestratorSubmitAgent:
             status_message="Submitting NERSC orchestrator (cron QOS)…",
             cycles=[CycleRecord(cycle=i) for i in range(1, int(total_cycles) + 1)],
         )
+        if strat and is_improvement_elastic_strategy(strat):
+            wf.selection_strategy = strat.selection_strategy
+            wf.recenter_trigger = strat.recenter_trigger
+            wf.improvement_tolerance = strat.improvement_tolerance
+            wf.incumbent_elastic_obj = strat.incumbent_elastic_obj
+            wf.max_regions = strat.max_regions
+            wf.max_total_runtime_sec = strat.max_total_runtime_sec
+            wf.status_message = "Submitting elastic improvement orchestrator (cron QOS)…"
 
         root = cfg.blast_root.rstrip("/")
         log_dir = f"{folder}/.agentic_loop/logs"

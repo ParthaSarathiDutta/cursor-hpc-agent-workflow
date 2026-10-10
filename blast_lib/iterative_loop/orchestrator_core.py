@@ -9,6 +9,7 @@ import subprocess
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Optional
 
@@ -25,7 +26,20 @@ from blast_lib.iterative_loop.ho_report_local import (
     require_scored_trials_count,
     scored_trials_before_cycle,
 )
-from blast_lib.iterative_loop.range_core import run_range_update_local
+from blast_lib.iterative_loop.elastic_improvement_watcher import ElasticImprovementWatcher
+from blast_lib.iterative_loop.range_core import apply_recenter_from_trial, run_range_update_local
+from blast_lib.iterative_loop.recenter_trigger import RECENTER_IMPROVEMENT
+from blast_lib.iterative_loop.region_provenance import (
+    append_improvement_event,
+    archive_region_report,
+    prepare_fresh_active_report,
+)
+from blast_lib.iterative_loop.selection_strategy import (
+    STRATEGY_ELASTIC,
+    StrategyConfig,
+    is_improvement_elastic_strategy,
+    load_strategy_config,
+)
 from blast_lib.iterative_loop.range_types import RangeUpdateResult
 from blast_lib.iterative_loop.remote_workflow import (
     WorkflowPhase,
@@ -110,6 +124,8 @@ class SallocRunResult:
     returncode: int
     combined_output: str
     job_id: str | None
+    aborted: bool = False
+    abort_reason: str | None = None  # "stop" | "improvement" | None
 
 
 OnSallocGranted = Optional[Callable[[str], None]]
@@ -337,6 +353,211 @@ def run_one_cycle(
     return True, wf
 
 
+def _apply_strategy_config_to_workflow(wf: Any, cfg: StrategyConfig) -> None:
+    wf.selection_strategy = cfg.selection_strategy
+    wf.recenter_trigger = cfg.recenter_trigger
+    wf.improvement_tolerance = cfg.improvement_tolerance
+    if wf.incumbent_elastic_obj is None and cfg.incumbent_elastic_obj is not None:
+        wf.incumbent_elastic_obj = cfg.incumbent_elastic_obj
+    if wf.max_regions is None:
+        wf.max_regions = cfg.max_regions
+    if wf.max_total_runtime_sec is None and cfg.max_total_runtime_sec is not None:
+        wf.max_total_runtime_sec = cfg.max_total_runtime_sec
+
+
+def _runtime_budget_exceeded(wf: Any) -> bool:
+    limit = wf.max_total_runtime_sec
+    if not limit or wf.workflow_started_monotonic is None:
+        return False
+    return (time.monotonic() - wf.workflow_started_monotonic) >= float(limit)
+
+
+def run_improvement_orchestrator(
+    wf_path: Path,
+    wf: Any,
+    *,
+    step_b: str,
+    hooks: OrchestratorHooks,
+    cfg: StrategyConfig,
+) -> int:
+    """Strategy 3: elastic selection + improvement-triggered recenter + fresh regions."""
+    run_folder = Path(wf.run_folder)
+    rp = run_folder / "reports" / "ho.report"
+
+    _apply_strategy_config_to_workflow(wf, cfg)
+    if wf.incumbent_elastic_obj is None:
+        return _fail(
+            wf_path,
+            wf,
+            hooks,
+            "improvement strategy requires incumbent_elastic_obj in strategy.json or workflow.json",
+        )
+    if wf.max_regions is None or wf.max_regions < 1:
+        wf.max_regions = cfg.max_regions
+
+    if wf.workflow_started_monotonic is None:
+        wf.workflow_started_monotonic = time.monotonic()
+
+    wf.status = WorkflowStatus.RUNNING
+    wf.phase = WorkflowPhase.AWAITING_SALLOC
+    wf.status_message = (
+        f"Elastic improvement search — region {wf.region}/{wf.max_regions}, "
+        f"incumbent elastic.values.obj={wf.incumbent_elastic_obj}"
+    )
+    hooks.save_workflow(wf_path, wf)
+
+    tolerance = float(wf.improvement_tolerance or cfg.improvement_tolerance)
+
+    while wf.region < int(wf.max_regions):
+        if _stopped(wf_path, wf, hooks):
+            return 0
+        if _runtime_budget_exceeded(wf):
+            wf.status = WorkflowStatus.COMPLETED
+            wf.phase = WorkflowPhase.COMPLETED
+            wf.status_message = "Workflow complete — max_total_runtime reached."
+            wf.error = None
+            hooks.save_workflow(wf_path, wf)
+            return 0
+
+        wf.region_started_at = datetime.now(timezone.utc).isoformat()
+        wf.trials_since_region_start = 0
+        hooks.save_workflow(wf_path, wf)
+
+        watcher = ElasticImprovementWatcher(
+            rp,
+            incumbent_elastic_obj=float(wf.incumbent_elastic_obj),
+            improvement_tolerance=tolerance,
+        )
+
+        while True:
+            if _stopped(wf_path, wf, hooks):
+                return 0
+            if _runtime_budget_exceeded(wf):
+                wf.status = WorkflowStatus.COMPLETED
+                wf.phase = WorkflowPhase.COMPLETED
+                wf.status_message = "Workflow complete — max_total_runtime reached."
+                wf.error = None
+                hooks.save_workflow(wf_path, wf)
+                return 0
+
+            abort_state: dict[str, Any] = {"reason": None, "trigger": None}
+
+            def on_poll() -> None:
+                if abort_state.get("reason"):
+                    return
+                trigger = watcher.poll()
+                if trigger is not None:
+                    abort_state["trigger"] = trigger
+                    abort_state["reason"] = "improvement"
+
+            def should_abort() -> bool:
+                if abort_state.get("reason") == "improvement":
+                    return True
+                if _stopped(wf_path, wf, hooks):
+                    abort_state["reason"] = "stop"
+                    return True
+                return False
+
+            settings = salloc_settings_from_workflow(wf)
+            shell_cmd = build_interactive_runbop_shell(settings, step_b=step_b)
+            child_env = clear_inherited_slurm_env(hooks.env)
+            wf.phase = WorkflowPhase.RUNNING_GPU
+            wf.status_message = (
+                f"Region {wf.region}: awaiting interactive GPU (incumbent {wf.incumbent_elastic_obj})…"
+            )
+            hooks.save_workflow(wf_path, wf)
+
+            def _on_salloc_granted(job_id: str) -> None:
+                live = hooks.load_workflow(wf_path)
+                live.current_interactive_job_id = job_id
+                live.phase = WorkflowPhase.RUNNING_GPU
+                live.status_message = (
+                    f"Region {live.region}: interactive allocation {job_id} running RunBOP…"
+                )
+                hooks.save_workflow(wf_path, live)
+
+            result = stream_shell_run(
+                shell_cmd,
+                child_env,
+                _on_salloc_granted,
+                should_abort=should_abort,
+                on_poll=on_poll,
+                abort_state=abort_state,
+            )
+
+            wf = hooks.load_workflow(wf_path)
+            wf.current_interactive_job_id = None
+
+            if _stopped(wf_path, wf, hooks):
+                return 0
+
+            if result.abort_reason == "improvement" or abort_state.get("reason") == "improvement":
+                trigger = abort_state.get("trigger") or watcher.last_trigger
+                if trigger is None:
+                    return _fail(wf_path, wf, hooks, "Improvement abort without trigger trial.")
+
+                wf.phase = WorkflowPhase.RUNNING_RANGE
+                wf.status_message = "Improvement detected — recentering…"
+                hooks.save_workflow(wf_path, wf)
+
+                range_result = apply_recenter_from_trial(
+                    run_folder,
+                    wf.blast_python,
+                    trigger.trial,
+                    selection_strategy=STRATEGY_ELASTIC,
+                    selection_reason="NEW_ELASTIC_CHAMPION",
+                )
+                if not range_result.ok:
+                    return _fail(wf_path, wf, hooks, range_result.message)
+
+                prev_incumbent = wf.incumbent_elastic_obj
+                metadata = {
+                    "selection_strategy": STRATEGY_ELASTIC,
+                    "recenter_trigger": RECENTER_IMPROVEMENT,
+                    "incumbent_elastic_obj_before": prev_incumbent,
+                    "candidate_elastic_obj": trigger.candidate_elastic_obj,
+                    "trigger_iteration": trigger.iteration,
+                    "trigger_reason": "improvement",
+                    "gpu_job_id": result.job_id,
+                    "improvement_tolerance": tolerance,
+                }
+                archive_region_report(run_folder, region=int(wf.region), metadata=metadata)
+                append_improvement_event(run_folder, metadata)
+                prepare_fresh_active_report(run_folder)
+
+                wf.incumbent_elastic_obj = trigger.candidate_elastic_obj
+                wf.last_trigger_reason = "improvement"
+                wf.last_trigger_iteration = trigger.iteration
+                wf.region += 1
+                wf.status_message = (
+                    f"Recentered after elastic improvement → incumbent {wf.incumbent_elastic_obj} "
+                    f"(region {wf.region})"
+                )
+                hooks.save_workflow(wf_path, wf)
+
+                if wf.region >= int(wf.max_regions):
+                    wf.status = WorkflowStatus.COMPLETED
+                    wf.phase = WorkflowPhase.COMPLETED
+                    wf.error = None
+                    wf.status_message = f"Workflow complete — max_regions ({wf.max_regions}) reached."
+                    hooks.save_workflow(wf_path, wf)
+                    return 0
+                break
+
+            wf.phase = WorkflowPhase.AWAITING_SALLOC
+            wf.status_message = (
+                f"Region {wf.region}: allocation ended without improvement; requesting another GPU…"
+            )
+            hooks.save_workflow(wf_path, wf)
+            continue
+
+    wf.status = WorkflowStatus.COMPLETED
+    wf.phase = WorkflowPhase.COMPLETED
+    wf.status_message = f"Workflow complete — max_regions ({wf.max_regions}) reached."
+    hooks.save_workflow(wf_path, wf)
+    return 0
+
+
 def run_orchestrator(
     wf_path: Path,
     *,
@@ -347,6 +568,11 @@ def run_orchestrator(
     wf = hooks.load_workflow(wf_path)
     if wf.status == WorkflowStatus.STOPPED:
         return 0
+
+    run_folder = Path(wf.run_folder)
+    cfg = load_strategy_config(run_folder)
+    if is_improvement_elastic_strategy(cfg):
+        return run_improvement_orchestrator(wf_path, wf, step_b=step_b, hooks=hooks, cfg=cfg)
 
     wf.status = WorkflowStatus.RUNNING
     wf.phase = WorkflowPhase.AWAITING_SALLOC
@@ -398,12 +624,17 @@ def _terminate_process_tree(
         proc.wait()
 
 
+OnPollInterval = Optional[Callable[[], None]]
+
+
 def stream_shell_run(
     cmd: str,
     env: dict[str, str],
     on_salloc_granted: OnSallocGranted = None,
     *,
     should_abort: ShouldAbort = None,
+    on_poll: OnPollInterval = None,
+    abort_state: dict[str, Any] | None = None,
     poll_slurm_job_state: PollSlurmJobState | None = None,
     poll_interval_sec: float = 5.0,
     cleanup_grace_sec: float = 30.0,
@@ -467,11 +698,19 @@ def stream_shell_run(
             return parse_salloc_job_id("".join(chunks))
 
     terminal_slurm_state: str | None = None
+    resolved_abort_reason: str | None = None
     while proc.poll() is None:
         active_job = _known_job_id()
 
+        if on_poll:
+            on_poll()
+
         if should_abort and should_abort():
             aborted = True
+            if abort_state and abort_state.get("reason"):
+                resolved_abort_reason = str(abort_state["reason"])
+            else:
+                resolved_abort_reason = "stop"
             if active_job:
                 scancel_job_local(active_job)
             _terminate_process_tree(
@@ -521,6 +760,8 @@ def stream_shell_run(
         returncode=returncode,
         combined_output=combined,
         job_id=resolved_job,
+        aborted=aborted,
+        abort_reason=resolved_abort_reason,
     )
 
 
