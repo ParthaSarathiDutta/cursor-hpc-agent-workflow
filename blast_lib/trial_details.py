@@ -32,7 +32,17 @@ FOLDER_POLYMORPHS: dict[str, dict[str, str]] = {
     },
 }
 
-STAGE_ORDER = ["lattice", "ce", "eos", "phonon", "elastic"]
+DEFAULT_STAGE_ORDER = ["lattice", "ce", "eos", "phonon", "elastic"]
+STAGE_ORDER = DEFAULT_STAGE_ORDER
+
+
+def resolve_stage_order(active_hierarchy: list[str] | None = None) -> list[str]:
+    """Default ladder for Strategies 1–3; pass active_hierarchy for time-based hierarchy runs."""
+    if not active_hierarchy:
+        return list(DEFAULT_STAGE_ORDER)
+    from blast_lib.iterative_loop.hierarchy_pass_counts import normalize_hierarchy
+
+    return normalize_hierarchy(active_hierarchy)
 
 METRIC_GLOSSARY = """Metric glossary (from ho.report return dicts — names vary by stage):
 - lattice / elastic / simple stages: values.MAE%, values.maxAE%, values.obj
@@ -96,19 +106,29 @@ def _pick_block_label(stage_lines_in_chunk: list[tuple[str, str]]) -> tuple[str 
     return stage_lines_in_chunk[-1]
 
 
-def _stage_from_substage_id(substage_id: str | None) -> str | None:
+def _stage_from_substage_id(
+    substage_id: str | None,
+    *,
+    stage_order: list[str] | None = None,
+) -> str | None:
     if not substage_id:
         return None
     m = re.match(r"(\d+)", substage_id)
     if not m:
         return None
+    order = resolve_stage_order(stage_order)
     idx = int(m.group(1))
-    if 1 <= idx <= len(STAGE_ORDER):
-        return STAGE_ORDER[idx - 1]
+    if 1 <= idx <= len(order):
+        return order[idx - 1]
     return None
 
 
-def _append_missing_substage_blocks(stage_lines: list[str], blocks: list[dict[str, Any]]) -> None:
+def _append_missing_substage_blocks(
+    stage_lines: list[str],
+    blocks: list[dict[str, Any]],
+    *,
+    stage_order: list[str] | None = None,
+) -> None:
     """Add blocks for substages marked missing (e.g. phonon 2.data never computed)."""
     existing = {(b.get("substage"), b.get("stage")) for b in blocks}
     for line in stage_lines:
@@ -116,7 +136,7 @@ def _append_missing_substage_blocks(stage_lines: list[str], blocks: list[dict[st
         if not m or "missing" not in m.group(2).lower():
             continue
         sid, label = m.group(1), m.group(2).strip()
-        stage = _stage_from_substage_id(sid)
+        stage = _stage_from_substage_id(sid, stage_order=stage_order)
         if not stage or (sid, stage) in existing:
             continue
         blocks.append(
@@ -136,7 +156,11 @@ def _append_missing_substage_blocks(stage_lines: list[str], blocks: list[dict[st
         existing.add((sid, stage))
 
 
-def parse_property_blocks(stage_lines: list[str]) -> list[dict[str, Any]]:
+def parse_property_blocks(
+    stage_lines: list[str],
+    *,
+    stage_order: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Split ho.report stage lines into scored property blocks (one per polymorph substage)."""
     chunks = re.split(r"(?=score:\s*)", "\n".join(stage_lines))
     blocks: list[dict[str, Any]] = []
@@ -188,7 +212,7 @@ def parse_property_blocks(stage_lines: list[str]) -> list[dict[str, Any]]:
             }
         )
 
-    _append_missing_substage_blocks(stage_lines, blocks)
+    _append_missing_substage_blocks(stage_lines, blocks, stage_order=stage_order)
     return blocks
 
 

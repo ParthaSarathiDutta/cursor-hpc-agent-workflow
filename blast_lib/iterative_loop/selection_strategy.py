@@ -6,6 +6,13 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from blast_lib.iterative_loop.hierarchy_constants import (
+    DEFAULT_ACTIVE_HIERARCHY,
+    DEFAULT_MAX_CONSECUTIVE_FAILED_ALLOCATIONS,
+    DEFAULT_OBSERVATION_WINDOW,
+    ORCHESTRATOR_TIME_BASED_FIRST_UNPASSED,
+)
+from blast_lib.iterative_loop.hierarchy_pass_counts import normalize_hierarchy
 from blast_lib.iterative_loop.recenter_trigger import (
     DEFAULT_IMPROVEMENT_TOLERANCE,
     DEFAULT_MAX_REGIONS,
@@ -31,6 +38,11 @@ class StrategyConfig:
     incumbent_elastic_obj: float | None = None
     max_regions: int = DEFAULT_MAX_REGIONS
     max_total_runtime_sec: int | None = None
+    orchestrator_strategy: str = ""
+    observation_window_sec: int | None = None
+    active_hierarchy: tuple[str, ...] = DEFAULT_ACTIVE_HIERARCHY
+    max_hierarchy_switches: int | None = None
+    max_consecutive_failed_allocations: int | None = None
 
 
 def _parse_strategy_payload(data: dict) -> StrategyConfig:
@@ -74,6 +86,41 @@ def _parse_strategy_payload(data: dict) -> StrategyConfig:
         except (TypeError, ValueError):
             max_rt = None
 
+    orchestrator = (data.get("orchestrator_strategy") or "").strip().lower()
+
+    obs_sec: int | None = None
+    if data.get("observation_window") is not None:
+        obs_sec = _walltime_or_seconds(data.get("observation_window"))
+    elif data.get("observation_window_sec") is not None:
+        try:
+            obs_sec = int(data["observation_window_sec"])
+        except (TypeError, ValueError):
+            obs_sec = _walltime_or_seconds(DEFAULT_OBSERVATION_WINDOW)
+    elif orchestrator == ORCHESTRATOR_TIME_BASED_FIRST_UNPASSED:
+        obs_sec = _walltime_or_seconds(DEFAULT_OBSERVATION_WINDOW)
+
+    hierarchy_raw = data.get("active_hierarchy")
+    if isinstance(hierarchy_raw, list) and hierarchy_raw:
+        active_hierarchy = tuple(normalize_hierarchy(hierarchy_raw))
+    else:
+        active_hierarchy = DEFAULT_ACTIVE_HIERARCHY
+
+    max_h_sw: int | None = None
+    if data.get("max_hierarchy_switches") is not None:
+        try:
+            max_h_sw = max(0, int(data["max_hierarchy_switches"]))
+        except (TypeError, ValueError):
+            max_h_sw = None
+
+    max_fail_alloc: int | None = None
+    if data.get("max_consecutive_failed_allocations") is not None:
+        try:
+            max_fail_alloc = max(1, int(data["max_consecutive_failed_allocations"]))
+        except (TypeError, ValueError):
+            max_fail_alloc = None
+    elif orchestrator == ORCHESTRATOR_TIME_BASED_FIRST_UNPASSED:
+        max_fail_alloc = DEFAULT_MAX_CONSECUTIVE_FAILED_ALLOCATIONS
+
     return StrategyConfig(
         selection_strategy=selection,
         recenter_trigger=recenter,
@@ -81,6 +128,11 @@ def _parse_strategy_payload(data: dict) -> StrategyConfig:
         incumbent_elastic_obj=incumbent,
         max_regions=max_regions,
         max_total_runtime_sec=max_rt,
+        orchestrator_strategy=orchestrator,
+        observation_window_sec=obs_sec,
+        active_hierarchy=active_hierarchy,
+        max_hierarchy_switches=max_h_sw,
+        max_consecutive_failed_allocations=max_fail_alloc,
     )
 
 
@@ -131,3 +183,7 @@ def is_improvement_elastic_strategy(cfg: StrategyConfig) -> bool:
         cfg.selection_strategy == STRATEGY_ELASTIC
         and cfg.recenter_trigger == RECENTER_IMPROVEMENT
     )
+
+
+def is_time_based_first_unpassed_hierarchy_strategy(cfg: StrategyConfig) -> bool:
+    return cfg.orchestrator_strategy == ORCHESTRATOR_TIME_BASED_FIRST_UNPASSED

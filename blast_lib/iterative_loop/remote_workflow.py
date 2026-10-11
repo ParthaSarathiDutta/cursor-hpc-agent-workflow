@@ -87,6 +87,23 @@ class RemoteWorkflow:
     last_trigger_reason: str = ""
     last_trigger_iteration: int | None = None
     workflow_started_monotonic: float | None = None
+    # Time-based first-unpassed hierarchy (optional)
+    orchestrator_strategy: str = ""
+    active_hierarchy: list[str] = field(default_factory=list)
+    hierarchy_epoch: int = 0
+    observation_window_index: int = 0
+    hierarchy_switch_count: int = 0
+    observation_window_sec: int | None = None
+    window_scored_trial_start: int = 0
+    window_started_monotonic: float | None = None
+    max_hierarchy_switches: int | None = None
+    max_consecutive_failed_allocations: int | None = None
+    consecutive_failed_allocations: int = 0
+    last_allocation_job_id: str | None = None
+    last_allocation_returncode: int | None = None
+    last_allocation_slurm_state: str | None = None
+    last_allocation_log_path: str | None = None
+    last_allocation_failure_summary: str | None = None
 
     def touch(self, **kwargs: Any) -> None:
         for key, val in kwargs.items():
@@ -161,6 +178,14 @@ def write_json_atomic(path: Path, data: dict[str, Any]) -> None:
 
 def is_active_status(status: str) -> bool:
     return status in (WorkflowStatus.QUEUED, WorkflowStatus.RUNNING)
+
+
+def ensure_orchestrator_job_id_from_environment(wf: RemoteWorkflow, env: dict[str, str]) -> RemoteWorkflow:
+    """Record cron orchestrator Slurm id when started via sbatch without UI second-write."""
+    jid = (env.get("SLURM_JOB_ID") or "").strip()
+    if jid.isdigit() and not wf.orchestrator_job_id:
+        wf.orchestrator_job_id = jid
+    return wf
 
 
 def mark_workflow_orchestrator_crash(

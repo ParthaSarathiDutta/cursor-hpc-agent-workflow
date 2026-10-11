@@ -34,10 +34,29 @@ from blast_lib.iterative_loop.region_provenance import (
     archive_region_report,
     prepare_fresh_active_report,
 )
+from blast_lib.agenticblast_submit import write_blast_root_input_txt
+from blast_lib.iterative_loop.hierarchy_constants import (
+    DECISION_ALL_PROPERTIES_PASSED,
+    DECISION_NO_SWAPPABLE_PROPERTY,
+    DECISION_SWITCH,
+    DECISION_SWITCH_SKIPPED_MAX,
+)
+from blast_lib.iterative_loop.hierarchy_decision import HierarchyWindowDecision
+from blast_lib.iterative_loop.hierarchy_provenance import (
+    append_hierarchy_event,
+    archive_hierarchy_epoch_report,
+    archive_mcts_tree_if_present,
+    prepare_fresh_active_report as prepare_fresh_hierarchy_report,
+    reset_mcts_tree_files,
+)
+from blast_lib.iterative_loop.hierarchy_switch import apply_hierarchy_switch_local
+from blast_lib.iterative_loop.hierarchy_window import HierarchyObservationWindow
+from blast_lib.iterative_loop.hierarchy_pass_counts import normalize_hierarchy
 from blast_lib.iterative_loop.selection_strategy import (
     STRATEGY_ELASTIC,
     StrategyConfig,
     is_improvement_elastic_strategy,
+    is_time_based_first_unpassed_hierarchy_strategy,
     load_strategy_config,
 )
 from blast_lib.iterative_loop.range_types import RangeUpdateResult
@@ -51,7 +70,13 @@ from blast_lib.iterative_loop.remote_workflow import (
     workflow_json_path,
     write_json_atomic,
 )
+from blast_lib.iterative_loop.allocation_teardown import drain_interactive_allocation
+from blast_lib.iterative_loop.hierarchy_constants import DEFAULT_MAX_CONSECUTIVE_FAILED_ALLOCATIONS
 from blast_lib.iterative_loop.salloc_command import SallocSettings, build_interactive_runbop_shell
+from blast_lib.iterative_loop.salloc_run_log import (
+    persist_salloc_run_output,
+    record_allocation_failure_snapshot,
+)
 from blast_lib.iterative_loop.slurm_env import clear_inherited_slurm_env
 
 _SALLOC_JOB_RE = re.compile(r"Granted job allocation (\d+)", re.I)
@@ -125,7 +150,8 @@ class SallocRunResult:
     combined_output: str
     job_id: str | None
     aborted: bool = False
-    abort_reason: str | None = None  # "stop" | "improvement" | None
+    abort_reason: str | None = None  # "stop" | "improvement" | "hierarchy_switch" | None
+    terminal_slurm_state: str | None = None
 
 
 OnSallocGranted = Optional[Callable[[str], None]]
@@ -145,6 +171,9 @@ class OrchestratorHooks:
     env: dict[str, str]
     salloc_retry_sleep_sec: float = 120.0
     max_salloc_attempts_per_cycle: int | None = None
+    max_consecutive_failed_allocations: int = DEFAULT_MAX_CONSECUTIVE_FAILED_ALLOCATIONS
+    poll_slurm_job_state: PollSlurmJobState = fetch_sacct_job_state_local
+    drain_interactive_allocation_fn: Callable[..., str | None] = drain_interactive_allocation
 
 
 def _fail(wf_path: Path, wf, hooks: OrchestratorHooks, message: str) -> int:
@@ -372,6 +401,368 @@ def _runtime_budget_exceeded(wf: Any) -> bool:
     return (time.monotonic() - wf.workflow_started_monotonic) >= float(limit)
 
 
+def _apply_hierarchy_config_to_workflow(wf: Any, cfg: StrategyConfig) -> None:
+    wf.orchestrator_strategy = cfg.orchestrator_strategy
+    if not wf.active_hierarchy:
+        wf.active_hierarchy = list(cfg.active_hierarchy)
+    if wf.observation_window_sec is None and cfg.observation_window_sec is not None:
+        wf.observation_window_sec = cfg.observation_window_sec
+    if wf.max_hierarchy_switches is None and cfg.max_hierarchy_switches is not None:
+        wf.max_hierarchy_switches = cfg.max_hierarchy_switches
+    if wf.max_consecutive_failed_allocations is None and cfg.max_consecutive_failed_allocations is not None:
+        wf.max_consecutive_failed_allocations = cfg.max_consecutive_failed_allocations
+
+
+def _effective_max_consecutive_failed_allocations(wf: Any, cfg: StrategyConfig, hooks: OrchestratorHooks) -> int:
+    if wf.max_consecutive_failed_allocations is not None:
+        return max(1, int(wf.max_consecutive_failed_allocations))
+    if cfg.max_consecutive_failed_allocations is not None:
+        return max(1, int(cfg.max_consecutive_failed_allocations))
+    return max(1, int(hooks.max_consecutive_failed_allocations))
+
+
+def _safe_scored_trial_count(hooks: OrchestratorHooks, report_path: Path) -> int:
+    try:
+        return int(hooks.count_trials(report_path))
+    except FileNotFoundError:
+        return 0
+
+
+def _allocation_ended_acceptably(result: SallocRunResult) -> bool:
+    if result.terminal_slurm_state and slurm_state_ok_after_gpu_walltime(result.terminal_slurm_state):
+        return True
+    if result.returncode == 0 and not result.aborted:
+        return True
+    if result.returncode == 0 and result.abort_reason == "hierarchy_switch":
+        return True
+    return False
+
+
+def _persist_stream_shell_result(run_folder: Path, result: SallocRunResult) -> Path:
+    return persist_salloc_run_output(
+        run_folder,
+        job_id=result.job_id,
+        combined_output=result.combined_output,
+        returncode=result.returncode,
+        terminal_slurm_state=result.terminal_slurm_state,
+        aborted=result.aborted,
+        abort_reason=result.abort_reason,
+    )
+
+
+def _effective_max_hierarchy_switches(wf: Any, cfg: StrategyConfig) -> int | None:
+    if wf.max_hierarchy_switches is not None:
+        return int(wf.max_hierarchy_switches)
+    if cfg.max_hierarchy_switches is not None:
+        return int(cfg.max_hierarchy_switches)
+    return None
+
+
+def _record_window_event(
+    run_folder: Path,
+    wf: Any,
+    window: HierarchyObservationWindow,
+    decision: Any,
+    *,
+    gpu_job_id: str | None = None,
+    switch_result: Any | None = None,
+) -> None:
+    payload: dict[str, Any] = {
+        "observation_window_index": window.state.observation_window_index,
+        "hierarchy_epoch": wf.hierarchy_epoch,
+        "active_hierarchy": list(wf.active_hierarchy),
+        "window_started_at": window.state.window_started_at_iso,
+        "elapsed_seconds": window.elapsed_sec(),
+        "scored_trials_in_window": decision.trials_in_window,
+        "pass_counts": decision.pass_counts,
+        "first_unpassed_property": decision.first_unpassed_property,
+        "swapped_with_property": decision.swapped_with_property,
+        "decision": decision.decision,
+    }
+    if decision.decision == DECISION_SWITCH and switch_result is not None:
+        payload.update(
+            {
+                "previous_hierarchy": decision.active_hierarchy,
+                "new_hierarchy": decision.target_hierarchy,
+                "gpu_job_id": gpu_job_id,
+                "main1_sha256_before": switch_result.main1_sha256_before,
+                "main1_sha256_after": switch_result.main1_sha256_after,
+                "model_json_sha256_before": switch_result.model_json_sha256,
+                "model_json_sha256_after": switch_result.model_json_sha256,
+                "mcts_restart_sha256_before": switch_result.mcts_restart_sha256,
+                "mcts_restart_sha256_after": switch_result.mcts_restart_sha256,
+            }
+        )
+    append_hierarchy_event(run_folder, payload)
+
+
+def run_time_based_first_unpassed_hierarchy_orchestrator(
+    wf_path: Path,
+    wf: Any,
+    *,
+    step_b: str,
+    hooks: OrchestratorHooks,
+    cfg: StrategyConfig,
+) -> int:
+    """Observation-window pass counts → adjacent swap in main1.py; no model.json recenter."""
+    run_folder = Path(wf.run_folder)
+    rp = run_folder / "reports" / "ho.report"
+
+    _apply_hierarchy_config_to_workflow(wf, cfg)
+    if not wf.active_hierarchy:
+        wf.active_hierarchy = list(cfg.active_hierarchy)
+    if wf.observation_window_sec is None:
+        return _fail(
+            wf_path,
+            wf,
+            hooks,
+            "time_based_first_unpassed_hierarchy requires observation_window in strategy.json",
+        )
+
+    if wf.workflow_started_monotonic is None:
+        wf.workflow_started_monotonic = time.monotonic()
+    if wf.window_started_monotonic is None:
+        wf.window_started_monotonic = time.monotonic()
+
+    try:
+        write_blast_root_input_txt(wf.blast_root, [str(run_folder.resolve())])
+    except OSError as exc:
+        return _fail(wf_path, wf, hooks, f"Could not write blast_root input.txt: {exc}")
+
+    wf.status = WorkflowStatus.RUNNING
+    wf.phase = WorkflowPhase.AWAITING_SALLOC
+    wf.status_message = (
+        f"Hierarchy search epoch {wf.hierarchy_epoch} — "
+        f"{' → '.join(normalize_hierarchy(wf.active_hierarchy))}"
+    )
+    hooks.save_workflow(wf_path, wf)
+
+    window = HierarchyObservationWindow(
+        rp,
+        observation_window_sec=float(wf.observation_window_sec),
+        active_hierarchy=list(wf.active_hierarchy),
+        observation_window_index=int(wf.observation_window_index),
+        scored_trial_start_index=int(wf.window_scored_trial_start),
+        window_started_monotonic=wf.window_started_monotonic,
+    )
+
+    while True:
+        if _stopped(wf_path, wf, hooks):
+            return 0
+        if _runtime_budget_exceeded(wf):
+            wf.status = WorkflowStatus.COMPLETED
+            wf.phase = WorkflowPhase.COMPLETED
+            wf.status_message = "Workflow complete — max_total_runtime reached."
+            wf.error = None
+            hooks.save_workflow(wf_path, wf)
+            return 0
+
+        abort_state: dict[str, Any] = {"reason": None, "decision": None}
+
+        def on_poll() -> None:
+            if abort_state.get("reason"):
+                return
+            decision = window.evaluate_if_due()
+            if decision is None:
+                return
+            if decision.decision == DECISION_SWITCH:
+                max_sw = _effective_max_hierarchy_switches(wf, cfg)
+                if max_sw is not None and int(wf.hierarchy_switch_count) >= max_sw:
+                    skipped = HierarchyWindowDecision(
+                        decision=DECISION_SWITCH_SKIPPED_MAX,
+                        active_hierarchy=decision.active_hierarchy,
+                        target_hierarchy=list(decision.active_hierarchy),
+                        pass_counts=decision.pass_counts,
+                        first_unpassed_property=decision.first_unpassed_property,
+                        swapped_with_property=decision.swapped_with_property,
+                        trials_in_window=decision.trials_in_window,
+                    )
+                    _record_window_event(run_folder, wf, window, skipped)
+                    window.begin_next_window()
+                    wf.observation_window_index = window.state.observation_window_index
+                    wf.window_scored_trial_start = window.state.scored_trial_start_index
+                    wf.window_started_monotonic = window.state.window_started_at_monotonic
+                    hooks.save_workflow(wf_path, wf)
+                    return
+                abort_state["decision"] = decision
+                abort_state["reason"] = "hierarchy_switch"
+                return
+            _record_window_event(run_folder, wf, window, decision)
+            window.begin_next_window()
+            wf.observation_window_index = window.state.observation_window_index
+            wf.window_scored_trial_start = window.state.scored_trial_start_index
+            wf.window_started_monotonic = window.state.window_started_at_monotonic
+            hooks.save_workflow(wf_path, wf)
+
+        def should_abort() -> bool:
+            if abort_state.get("reason") == "hierarchy_switch":
+                return True
+            if _stopped(wf_path, wf, hooks):
+                abort_state["reason"] = "stop"
+                return True
+            return False
+
+        settings = salloc_settings_from_workflow(wf)
+        shell_cmd = build_interactive_runbop_shell(settings, step_b=step_b)
+        child_env = clear_inherited_slurm_env(hooks.env)
+        wf.phase = WorkflowPhase.RUNNING_GPU
+        wf.status_message = (
+            f"Hierarchy epoch {wf.hierarchy_epoch}: awaiting interactive GPU "
+            f"(window {window.state.observation_window_index})…"
+        )
+        hooks.save_workflow(wf_path, wf)
+
+        def _on_salloc_granted(job_id: str) -> None:
+            live = hooks.load_workflow(wf_path)
+            live.current_interactive_job_id = job_id
+            live.phase = WorkflowPhase.RUNNING_GPU
+            live.status_message = (
+                f"Hierarchy epoch {live.hierarchy_epoch}: allocation {job_id} running RunBOP…"
+            )
+            hooks.save_workflow(wf_path, live)
+
+        trials_before = _safe_scored_trial_count(hooks, rp)
+
+        result = stream_shell_run(
+            shell_cmd,
+            child_env,
+            _on_salloc_granted,
+            should_abort=should_abort,
+            on_poll=on_poll,
+            abort_state=abort_state,
+            poll_slurm_job_state=hooks.poll_slurm_job_state,
+        )
+
+        log_path = _persist_stream_shell_result(run_folder, result)
+
+        wf = hooks.load_workflow(wf_path)
+        wf.current_interactive_job_id = None
+
+        if _stopped(wf_path, wf, hooks):
+            return 0
+
+        if result.abort_reason == "hierarchy_switch" or abort_state.get("reason") == "hierarchy_switch":
+            decision = abort_state.get("decision")
+            if decision is None:
+                return _fail(wf_path, wf, hooks, "Hierarchy switch abort without decision.")
+
+            terminal_state = hooks.drain_interactive_allocation_fn(
+                result.job_id,
+                poll_fn=hooks.poll_slurm_job_state,
+                sleep_fn=hooks.sleep,
+                request_cancel=True,
+            )
+            if result.job_id:
+                final_state = terminal_state or hooks.poll_slurm_job_state(str(result.job_id))
+                if not final_state or not slurm_state_is_terminal(final_state):
+                    return _fail(
+                        wf_path,
+                        wf,
+                        hooks,
+                        f"Hierarchy switch: interactive job {result.job_id} did not reach terminal state "
+                        f"(last state {final_state!r}).",
+                    )
+                terminal_state = final_state
+
+            switch_result = apply_hierarchy_switch_local(run_folder, decision)
+            if not switch_result.ok:
+                return _fail(wf_path, wf, hooks, switch_result.message)
+
+            archived_trees = archive_mcts_tree_if_present(run_folder, epoch=int(wf.hierarchy_epoch))
+            reset_mcts_tree_files(run_folder)
+
+            metadata = {
+                "decision": DECISION_SWITCH,
+                "previous_hierarchy": decision.active_hierarchy,
+                "new_hierarchy": switch_result.target_hierarchy,
+                "pass_counts": decision.pass_counts,
+                "first_unpassed_property": decision.first_unpassed_property,
+                "swapped_with_property": decision.swapped_with_property,
+                "gpu_job_id": result.job_id,
+                "archived_mcts_files": archived_trees,
+                "allocation_log": log_path.as_posix(),
+                "allocation_terminal_slurm_state": terminal_state or result.terminal_slurm_state,
+            }
+            archive_hierarchy_epoch_report(run_folder, epoch=int(wf.hierarchy_epoch), metadata=metadata)
+            prepare_fresh_hierarchy_report(run_folder)
+
+            _record_window_event(
+                run_folder,
+                wf,
+                window,
+                decision,
+                gpu_job_id=result.job_id,
+                switch_result=switch_result,
+            )
+
+            wf.active_hierarchy = list(switch_result.target_hierarchy)
+            wf.hierarchy_epoch = int(wf.hierarchy_epoch) + 1
+            wf.hierarchy_switch_count = int(wf.hierarchy_switch_count) + 1
+            wf.consecutive_failed_allocations = 0
+            wf.last_allocation_failure_summary = None
+            window.active_hierarchy = list(wf.active_hierarchy)
+            window.begin_next_window()
+            wf.observation_window_index = window.state.observation_window_index
+            wf.window_scored_trial_start = window.state.scored_trial_start_index
+            wf.window_started_monotonic = window.state.window_started_at_monotonic
+            wf.status_message = (
+                f"Hierarchy switch → {' → '.join(wf.active_hierarchy)} (epoch {wf.hierarchy_epoch})"
+            )
+            hooks.save_workflow(wf_path, wf)
+            continue
+
+        trials_after = _safe_scored_trial_count(hooks, rp)
+        productive = trials_after > trials_before
+        acceptable = _allocation_ended_acceptably(result)
+
+        if productive or acceptable:
+            wf.consecutive_failed_allocations = 0
+            wf.last_allocation_failure_summary = None
+            wf.phase = WorkflowPhase.AWAITING_SALLOC
+            wf.status_message = (
+                f"Hierarchy epoch {wf.hierarchy_epoch}: allocation ended; requesting another GPU…"
+            )
+            hooks.save_workflow(wf_path, wf)
+            continue
+
+        record_allocation_failure_snapshot(
+            run_folder,
+            job_id=result.job_id,
+            returncode=result.returncode,
+            terminal_slurm_state=result.terminal_slurm_state,
+            log_path=log_path,
+            combined_output=result.combined_output,
+        )
+        wf.consecutive_failed_allocations = int(wf.consecutive_failed_allocations or 0) + 1
+        wf.last_allocation_job_id = result.job_id
+        wf.last_allocation_returncode = result.returncode
+        wf.last_allocation_slurm_state = result.terminal_slurm_state
+        wf.last_allocation_log_path = log_path.as_posix()
+        tail = (result.combined_output or "")[-500:]
+        summary = (
+            f"exit={result.returncode} slurm={result.terminal_slurm_state!r} "
+            f"consecutive={wf.consecutive_failed_allocations}"
+        )
+        wf.last_allocation_failure_summary = summary
+        max_fail = _effective_max_consecutive_failed_allocations(wf, cfg, hooks)
+        msg = (
+            f"Interactive allocation failed ({summary}). "
+            f"See {log_path.name}. {tail}"
+        )
+        if wf.consecutive_failed_allocations >= max_fail:
+            return _fail(
+                wf_path,
+                wf,
+                hooks,
+                f"{max_fail} consecutive failed interactive allocations. {msg}",
+            )
+        wf.phase = WorkflowPhase.AWAITING_SALLOC
+        wf.status_message = f"{msg} Retrying after {hooks.salloc_retry_sleep_sec}s…"
+        hooks.save_workflow(wf_path, wf)
+        hooks.sleep(hooks.salloc_retry_sleep_sec)
+        continue
+
+
 def run_improvement_orchestrator(
     wf_path: Path,
     wf: Any,
@@ -571,6 +962,10 @@ def run_orchestrator(
 
     run_folder = Path(wf.run_folder)
     cfg = load_strategy_config(run_folder)
+    if is_time_based_first_unpassed_hierarchy_strategy(cfg):
+        return run_time_based_first_unpassed_hierarchy_orchestrator(
+            wf_path, wf, step_b=step_b, hooks=hooks, cfg=cfg
+        )
     if is_improvement_elastic_strategy(cfg):
         return run_improvement_orchestrator(wf_path, wf, step_b=step_b, hooks=hooks, cfg=cfg)
 
@@ -762,6 +1157,7 @@ def stream_shell_run(
         job_id=resolved_job,
         aborted=aborted,
         abort_reason=resolved_abort_reason,
+        terminal_slurm_state=terminal_slurm_state,
     )
 
 

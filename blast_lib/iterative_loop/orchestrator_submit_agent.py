@@ -18,6 +18,7 @@ from blast_lib.iterative_loop.orchestrator_core import (
 from blast_lib.iterative_loop.selection_strategy import (
     StrategyConfig,
     is_improvement_elastic_strategy,
+    is_time_based_first_unpassed_hierarchy_strategy,
     strategy_config_from_dict,
 )
 
@@ -169,6 +170,12 @@ class OrchestratorSubmitAgent:
             else:
                 need = int(strat.max_regions * per + cfg.orchestrator_cron_margin_hours * 3600 + 1800)
             cron_wall = seconds_to_slurm_time(min(need, _CRON_WALLTIME_CAP_SEC))
+        elif strat and is_time_based_first_unpassed_hierarchy_strategy(strat):
+            if strat.max_total_runtime_sec:
+                need = int(strat.max_total_runtime_sec + cfg.orchestrator_cron_margin_hours * 3600 + 600)
+            else:
+                need = int(walltime_hms_to_seconds(walltime.strip()) * 4 + cfg.orchestrator_cron_margin_hours * 3600)
+            cron_wall = seconds_to_slurm_time(min(need, _CRON_WALLTIME_CAP_SEC))
         else:
             cron_wall = estimate_orchestrator_cron_walltime(
                 total_cycles=int(total_cycles),
@@ -203,6 +210,13 @@ class OrchestratorSubmitAgent:
             wf.max_regions = strat.max_regions
             wf.max_total_runtime_sec = strat.max_total_runtime_sec
             wf.status_message = "Submitting elastic improvement orchestrator (cron QOS)…"
+        elif strat and is_time_based_first_unpassed_hierarchy_strategy(strat):
+            wf.orchestrator_strategy = strat.orchestrator_strategy
+            wf.active_hierarchy = list(strat.active_hierarchy)
+            wf.observation_window_sec = strat.observation_window_sec
+            wf.max_hierarchy_switches = strat.max_hierarchy_switches
+            wf.max_total_runtime_sec = strat.max_total_runtime_sec
+            wf.status_message = "Submitting time-based hierarchy orchestrator (cron QOS)…"
 
         root = cfg.blast_root.rstrip("/")
         log_dir = f"{folder}/.agentic_loop/logs"

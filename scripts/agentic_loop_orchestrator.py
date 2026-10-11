@@ -16,8 +16,10 @@ from blast_lib.iterative_loop.orchestrator_core import (  # noqa: E402
     run_orchestrator,
 )
 from blast_lib.iterative_loop.remote_workflow import (  # noqa: E402
+    ensure_orchestrator_job_id_from_environment,
     load_workflow,
     mark_workflow_orchestrator_crash,
+    save_workflow,
     workflow_json_path,
 )
 from blast_lib.iterative_loop.runbop_launch import (  # noqa: E402
@@ -42,7 +44,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
+        import os
+
         wf = load_workflow(wf_path)
+        wf = ensure_orchestrator_job_id_from_environment(wf, os.environ)
+        save_workflow(wf_path, wf)
         step_b = _step_b_for_workflow(wf)
         hooks = default_hooks()
         return run_orchestrator(wf_path, step_b=step_b, hooks=hooks)

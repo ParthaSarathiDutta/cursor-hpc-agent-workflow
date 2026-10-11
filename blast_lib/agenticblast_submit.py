@@ -6,6 +6,7 @@ import re
 import shlex
 from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 
 from blast_lib.config_types import REPO_ROOT, UIConfig
 from blast_lib.iterative_loop.runbop_launch import (
@@ -57,6 +58,21 @@ def format_input_txt_lines(folder_paths: list[str]) -> str:
             seen.add(norm)
             lines.append(norm)
     return "".join(f"{line}\n" for line in lines)
+
+
+def write_blast_root_input_txt(blast_root: str, folder_paths: list[str]) -> Path:
+    """
+    Write ``{blast_root}/input.txt`` for parallel RunBOP (Perlmutter orchestrator path).
+
+    Each line must end with ``/`` so GNU parallel expands ``{}/RunBOP.py`` correctly.
+    """
+    if not folder_paths:
+        raise SubmitPathError("At least one run folder path is required.")
+    root = blast_root.rstrip("/")
+    body = format_input_txt_lines(folder_paths)
+    path = Path(root) / "input.txt"
+    path.write_text(body)
+    return path
 
 
 def list_blast_run_dirs(config: UIConfig) -> list[str]:

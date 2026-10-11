@@ -63,7 +63,7 @@ def format_parallel_runbop_command(settings: RunBopLaunchSettings) -> str:
     root = settings.blast_root.rstrip("/")
     py = settings.blast_python
     env = format_env_setup_command(settings)
-    inner = f"{env} && cd {{}} && rm -rf tmp && {py} {{}}RunBOP.py"
+    inner = f"{env} && cd {{}} && rm -rf tmp && {py} {{}}/RunBOP.py"
     return (
         f"{env} && "
         f"cd {root} && cat {settings.input_txt_name} | "
