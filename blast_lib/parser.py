@@ -24,11 +24,17 @@ def parse_ho_report(report_path: Path) -> list[dict]:
                     "score": None,
                     "status": "pending",
                     "reason": "",
+                    "input_params": line.split(None, 1)[1].strip() if " " in line else "",
+                    "stage_lines": [],
                 }
                 trials.append(current)
                 continue
 
             if current is None:
+                continue
+
+            if line.startswith("#") and "finalObj" not in line:
+                current["stage_lines"].append(line.lstrip("# ").strip())
                 continue
 
             if "invalid parameter" in line:

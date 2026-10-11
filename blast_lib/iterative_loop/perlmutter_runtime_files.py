@@ -1,0 +1,60 @@
+"""Paths under repo root required on Perlmutter for GPU/Range batch jobs (no SSH at runtime)."""
+
+from __future__ import annotations
+
+from blast_lib.config_types import REPO_ROOT
+
+PERLMUTTER_RUNTIME_REL_PATHS: tuple[str, ...] = (
+    "blast_lib/__init__.py",
+    "blast_lib/parser.py",
+    "blast_lib/metrics.py",
+    "blast_lib/changemodel_bounds.py",
+    "blast_lib/config_types.py",
+    "blast_lib/config.py",
+    "blast_lib/env.py",
+    "blast_lib/remote.py",
+    "blast_lib/run_paths.py",
+    "blast_lib/iterative_loop/__init__.py",
+    "blast_lib/iterative_loop/ho_report_local.py",
+    "blast_lib/iterative_loop/selection_strategy.py",
+    "blast_lib/iterative_loop/recenter_trigger.py",
+    "blast_lib/iterative_loop/elastic_improvement_watcher.py",
+    "blast_lib/iterative_loop/blocked_property_metrics.py",
+    "blast_lib/iterative_loop/blocked_property_state.py",
+    "blast_lib/iterative_loop/blocked_property_improvement_watcher.py",
+    "blast_lib/iterative_loop/hierarchy_constants.py",
+    "blast_lib/iterative_loop/hierarchy_pass_counts.py",
+    "blast_lib/iterative_loop/hierarchy_decision.py",
+    "blast_lib/iterative_loop/hierarchy_window.py",
+    "blast_lib/iterative_loop/hierarchy_provenance.py",
+    "blast_lib/iterative_loop/hierarchy_switch.py",
+    "blast_lib/iterative_loop/main1_hierarchy.py",
+    "blast_lib/iterative_loop/region_provenance.py",
+    "blast_lib/trial_details.py",
+    "blast_lib/main1_checkpoints.py",
+    "blast_lib/iterative_loop/tersoff_params.py",
+    "blast_lib/iterative_loop/range_types.py",
+    "blast_lib/iterative_loop/range_core.py",
+    "blast_lib/iterative_loop/remote_workflow.py",
+    "blast_lib/iterative_loop/slurm_timing.py",
+    "blast_lib/iterative_loop/slurm_job_state.py",
+    "blast_lib/iterative_loop/slurm_cancel.py",
+    "blast_lib/iterative_loop/slurm_env.py",
+    "blast_lib/iterative_loop/salloc_command.py",
+    "blast_lib/iterative_loop/salloc_run_log.py",
+    "blast_lib/iterative_loop/allocation_teardown.py",
+    "blast_lib/iterative_loop/runbop_launch.py",
+    "blast_lib/iterative_loop/orchestrator_core.py",
+    "scripts/agentic_loop_orchestrator.py",
+    "scripts/agentic_loop_gpu.py",
+    "scripts/agentic_loop_range.py",
+    "scripts/agentic_loop_workflow_cli.py",
+)
+
+
+def iter_runtime_files():
+    for rel in PERLMUTTER_RUNTIME_REL_PATHS:
+        path = REPO_ROOT / rel
+        if not path.is_file():
+            raise FileNotFoundError(f"Missing Perlmutter runtime file: {rel}")
+        yield rel, path
