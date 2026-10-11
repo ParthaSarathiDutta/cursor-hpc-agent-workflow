@@ -10,6 +10,7 @@ from blast_lib.iterative_loop.hierarchy_constants import (
     DEFAULT_ACTIVE_HIERARCHY,
     DEFAULT_MAX_CONSECUTIVE_FAILED_ALLOCATIONS,
     DEFAULT_OBSERVATION_WINDOW,
+    ORCHESTRATOR_BLOCKED_PROPERTY_IMPROVEMENT,
     ORCHESTRATOR_TIME_BASED_FIRST_UNPASSED,
 )
 from blast_lib.iterative_loop.hierarchy_pass_counts import normalize_hierarchy
@@ -187,3 +188,7 @@ def is_improvement_elastic_strategy(cfg: StrategyConfig) -> bool:
 
 def is_time_based_first_unpassed_hierarchy_strategy(cfg: StrategyConfig) -> bool:
     return cfg.orchestrator_strategy == ORCHESTRATOR_TIME_BASED_FIRST_UNPASSED
+
+
+def is_blocked_property_improvement_strategy(cfg: StrategyConfig) -> bool:
+    return cfg.orchestrator_strategy == ORCHESTRATOR_BLOCKED_PROPERTY_IMPROVEMENT
