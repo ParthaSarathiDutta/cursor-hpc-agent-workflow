@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 ORCHESTRATOR_TIME_BASED_FIRST_UNPASSED = "time_based_first_unpassed_hierarchy"
+ORCHESTRATOR_BLOCKED_PROPERTY_IMPROVEMENT = "blocked_property_improvement"
 
 DEFAULT_ACTIVE_HIERARCHY: tuple[str, ...] = (
     "lattice",

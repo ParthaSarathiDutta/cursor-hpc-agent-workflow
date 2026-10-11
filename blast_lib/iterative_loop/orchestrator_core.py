@@ -26,6 +26,10 @@ from blast_lib.iterative_loop.ho_report_local import (
     require_scored_trials_count,
     scored_trials_before_cycle,
 )
+from blast_lib.iterative_loop.blocked_property_improvement_watcher import (
+    BlockedPropertyImprovementWatcher,
+)
+from blast_lib.iterative_loop.blocked_property_state import BlockedPropertyState
 from blast_lib.iterative_loop.elastic_improvement_watcher import ElasticImprovementWatcher
 from blast_lib.iterative_loop.range_core import apply_recenter_from_trial, run_range_update_local
 from blast_lib.iterative_loop.recenter_trigger import RECENTER_IMPROVEMENT
@@ -54,7 +58,9 @@ from blast_lib.iterative_loop.hierarchy_window import HierarchyObservationWindow
 from blast_lib.iterative_loop.hierarchy_pass_counts import normalize_hierarchy
 from blast_lib.iterative_loop.selection_strategy import (
     STRATEGY_ELASTIC,
+    STRATEGY_OVERALL,
     StrategyConfig,
+    is_blocked_property_improvement_strategy,
     is_improvement_elastic_strategy,
     is_time_based_first_unpassed_hierarchy_strategy,
     load_strategy_config,
@@ -399,6 +405,25 @@ def _runtime_budget_exceeded(wf: Any) -> bool:
     if not limit or wf.workflow_started_monotonic is None:
         return False
     return (time.monotonic() - wf.workflow_started_monotonic) >= float(limit)
+
+
+def _apply_blocked_property_config_to_workflow(wf: Any, cfg: StrategyConfig) -> None:
+    wf.orchestrator_strategy = cfg.orchestrator_strategy
+    if not wf.active_hierarchy:
+        wf.active_hierarchy = list(cfg.active_hierarchy)
+    wf.improvement_tolerance = cfg.improvement_tolerance
+    if wf.max_regions is None:
+        wf.max_regions = cfg.max_regions
+    if wf.max_total_runtime_sec is None and cfg.max_total_runtime_sec is not None:
+        wf.max_total_runtime_sec = cfg.max_total_runtime_sec
+    BlockedPropertyState.from_workflow(wf)  # normalize pass/reach dict keys
+
+
+def _sync_blocked_property_to_workflow(
+    wf: Any, state: BlockedPropertyState, watcher: BlockedPropertyImprovementWatcher
+) -> None:
+    state.apply_to_workflow(wf)
+    wf.incumbent_property_obj = watcher.incumbent_property_obj
 
 
 def _apply_hierarchy_config_to_workflow(wf: Any, cfg: StrategyConfig) -> None:
@@ -949,6 +974,242 @@ def run_improvement_orchestrator(
     return 0
 
 
+def run_blocked_property_improvement_orchestrator(
+    wf_path: Path,
+    wf: Any,
+    *,
+    step_b: str,
+    hooks: OrchestratorHooks,
+    cfg: StrategyConfig,
+) -> int:
+    """Generalized Strategy 3: blocked-property metric improvement + full-vector recenter."""
+    run_folder = Path(wf.run_folder)
+    rp = run_folder / "reports" / "ho.report"
+
+    _apply_blocked_property_config_to_workflow(wf, cfg)
+    if wf.max_regions is None or wf.max_regions < 1:
+        wf.max_regions = cfg.max_regions
+
+    if wf.workflow_started_monotonic is None:
+        wf.workflow_started_monotonic = time.monotonic()
+
+    state = BlockedPropertyState.from_workflow(wf)
+    state.discover_target_if_needed()
+    wf.status = WorkflowStatus.RUNNING
+    wf.phase = WorkflowPhase.AWAITING_SALLOC
+    target_msg = wf.target_property or "discovering blocked property"
+    wf.status_message = (
+        f"Blocked-property improvement — region {wf.region}/{wf.max_regions}, target={target_msg}"
+    )
+    hooks.save_workflow(wf_path, wf)
+
+    tolerance = float(wf.improvement_tolerance or cfg.improvement_tolerance)
+
+    while wf.region < int(wf.max_regions):
+        if _stopped(wf_path, wf, hooks):
+            return 0
+        if _runtime_budget_exceeded(wf):
+            wf.status = WorkflowStatus.COMPLETED
+            wf.phase = WorkflowPhase.COMPLETED
+            wf.status_message = "Workflow complete — max_total_runtime reached."
+            wf.error = None
+            hooks.save_workflow(wf_path, wf)
+            return 0
+
+        state = BlockedPropertyState.from_workflow(wf)
+        state.discover_target_if_needed()
+        if state.all_passed():
+            wf.status = WorkflowStatus.COMPLETED
+            wf.phase = WorkflowPhase.COMPLETED
+            wf.status_message = "All hierarchy properties passed — objective satisfied."
+            wf.error = None
+            state.apply_to_workflow(wf)
+            hooks.save_workflow(wf_path, wf)
+            return 0
+
+        wf.region_started_at = datetime.now(timezone.utc).isoformat()
+        wf.trials_since_region_start = 0
+        hooks.save_workflow(wf_path, wf)
+
+        watcher = BlockedPropertyImprovementWatcher(
+            rp,
+            state=state,
+            incumbent_property_obj=wf.incumbent_property_obj,
+            improvement_tolerance=tolerance,
+        )
+
+        while True:
+            if _stopped(wf_path, wf, hooks):
+                return 0
+            if _runtime_budget_exceeded(wf):
+                wf.status = WorkflowStatus.COMPLETED
+                wf.phase = WorkflowPhase.COMPLETED
+                wf.status_message = "Workflow complete — max_total_runtime reached."
+                wf.error = None
+                hooks.save_workflow(wf_path, wf)
+                return 0
+
+            abort_state: dict[str, Any] = {"reason": None, "trigger": None}
+
+            def on_poll() -> None:
+                if abort_state.get("reason"):
+                    return
+                trigger = watcher.poll()
+                live = hooks.load_workflow(wf_path)
+                _sync_blocked_property_to_workflow(live, watcher.state, watcher)
+                if watcher.last_target_advanced is not None:
+                    adv = watcher.last_target_advanced
+                    append_improvement_event(
+                        run_folder,
+                        {
+                            "event_type": "target_property_advanced",
+                            "region": live.region,
+                            "old_target_property": adv.old_target_property,
+                            "new_target_property": adv.new_target_property,
+                            "reason": adv.reason,
+                            "trigger_iteration": adv.trial.get("iteration"),
+                            "property_passed_ever": dict(watcher.state.property_passed_ever),
+                        },
+                    )
+                    live.incumbent_property_obj = None
+                    watcher.last_target_advanced = None
+                    hooks.save_workflow(wf_path, live)
+                if watcher.state.all_passed():
+                    abort_state["reason"] = "all_passed"
+                    return
+                if trigger is not None:
+                    abort_state["trigger"] = trigger
+                    abort_state["reason"] = "improvement"
+
+            def should_abort() -> bool:
+                if abort_state.get("reason") in ("improvement", "all_passed"):
+                    return True
+                if _stopped(wf_path, wf, hooks):
+                    abort_state["reason"] = "stop"
+                    return True
+                return False
+
+            settings = salloc_settings_from_workflow(wf)
+            shell_cmd = build_interactive_runbop_shell(settings, step_b=step_b)
+            child_env = clear_inherited_slurm_env(hooks.env)
+            wf = hooks.load_workflow(wf_path)
+            target = wf.target_property or "discovery"
+            wf.phase = WorkflowPhase.RUNNING_GPU
+            wf.status_message = (
+                f"Region {wf.region}: target {target} "
+                f"(incumbent {wf.incumbent_property_obj})…"
+            )
+            hooks.save_workflow(wf_path, wf)
+
+            def _on_salloc_granted(job_id: str) -> None:
+                live = hooks.load_workflow(wf_path)
+                live.current_interactive_job_id = job_id
+                live.phase = WorkflowPhase.RUNNING_GPU
+                live.status_message = (
+                    f"Region {live.region}: allocation {job_id} running RunBOP "
+                    f"(target {live.target_property or 'discovery'})…"
+                )
+                hooks.save_workflow(wf_path, live)
+
+            result = stream_shell_run(
+                shell_cmd,
+                child_env,
+                _on_salloc_granted,
+                should_abort=should_abort,
+                on_poll=on_poll,
+                abort_state=abort_state,
+            )
+
+            wf = hooks.load_workflow(wf_path)
+            wf.current_interactive_job_id = None
+            _sync_blocked_property_to_workflow(wf, watcher.state, watcher)
+
+            if _stopped(wf_path, wf, hooks):
+                return 0
+
+            if abort_state.get("reason") == "all_passed" or watcher.state.all_passed():
+                wf.status = WorkflowStatus.COMPLETED
+                wf.phase = WorkflowPhase.COMPLETED
+                wf.status_message = "All hierarchy properties passed — objective satisfied."
+                wf.error = None
+                hooks.save_workflow(wf_path, wf)
+                return 0
+
+            if result.abort_reason == "improvement" or abort_state.get("reason") == "improvement":
+                trigger = abort_state.get("trigger") or watcher.last_improvement
+                if trigger is None:
+                    return _fail(wf_path, wf, hooks, "Improvement abort without trigger trial.")
+
+                wf.phase = WorkflowPhase.RUNNING_RANGE
+                wf.status_message = f"Improvement on {trigger.target_property} — recentering…"
+                hooks.save_workflow(wf_path, wf)
+
+                selection_reason = (
+                    f"blocked_property_improvement:{trigger.target_property}:"
+                    f"{trigger.metric_name}"
+                )
+                range_result = apply_recenter_from_trial(
+                    run_folder,
+                    wf.blast_python,
+                    trigger.trial,
+                    selection_strategy=STRATEGY_OVERALL,
+                    selection_reason=selection_reason,
+                )
+                if not range_result.ok:
+                    return _fail(wf_path, wf, hooks, range_result.message)
+
+                metadata = {
+                    "event_type": "blocked_property_recenter",
+                    "selection_strategy": STRATEGY_OVERALL,
+                    "recenter_trigger": RECENTER_IMPROVEMENT,
+                    "region": int(wf.region),
+                    "target_property": trigger.target_property,
+                    "metric_name": trigger.metric_name,
+                    "incumbent_before": trigger.incumbent_before,
+                    "candidate_property_metric": trigger.candidate_property_metric,
+                    "trigger_iteration": trigger.iteration,
+                    "trigger_reason": "improvement",
+                    "gpu_job_id": result.job_id,
+                    "improvement_tolerance": tolerance,
+                    "property_passed_ever": dict(wf.property_passed_ever),
+                }
+                archive_region_report(run_folder, region=int(wf.region), metadata=metadata)
+                append_improvement_event(run_folder, metadata)
+                prepare_fresh_active_report(run_folder)
+
+                wf.incumbent_property_obj = None
+                wf.last_trigger_reason = "improvement"
+                wf.last_trigger_iteration = trigger.iteration
+                wf.region += 1
+                wf.status_message = (
+                    f"Recentered after {trigger.target_property} improvement "
+                    f"(region {wf.region}, target still {wf.target_property})"
+                )
+                hooks.save_workflow(wf_path, wf)
+
+                if wf.region >= int(wf.max_regions):
+                    wf.status = WorkflowStatus.COMPLETED
+                    wf.phase = WorkflowPhase.COMPLETED
+                    wf.error = None
+                    wf.status_message = f"Workflow complete — max_regions ({wf.max_regions}) reached."
+                    hooks.save_workflow(wf_path, wf)
+                    return 0
+                break
+
+            wf.phase = WorkflowPhase.AWAITING_SALLOC
+            wf.status_message = (
+                f"Region {wf.region}: allocation ended without improvement; requesting another GPU…"
+            )
+            hooks.save_workflow(wf_path, wf)
+            continue
+
+    wf.status = WorkflowStatus.COMPLETED
+    wf.phase = WorkflowPhase.COMPLETED
+    wf.status_message = f"Workflow complete — max_regions ({wf.max_regions}) reached."
+    hooks.save_workflow(wf_path, wf)
+    return 0
+
+
 def run_orchestrator(
     wf_path: Path,
     *,
@@ -964,6 +1225,10 @@ def run_orchestrator(
     cfg = load_strategy_config(run_folder)
     if is_time_based_first_unpassed_hierarchy_strategy(cfg):
         return run_time_based_first_unpassed_hierarchy_orchestrator(
+            wf_path, wf, step_b=step_b, hooks=hooks, cfg=cfg
+        )
+    if is_blocked_property_improvement_strategy(cfg):
+        return run_blocked_property_improvement_orchestrator(
             wf_path, wf, step_b=step_b, hooks=hooks, cfg=cfg
         )
     if is_improvement_elastic_strategy(cfg):

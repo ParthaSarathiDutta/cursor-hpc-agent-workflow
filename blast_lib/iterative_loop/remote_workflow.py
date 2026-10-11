@@ -104,6 +104,12 @@ class RemoteWorkflow:
     last_allocation_slurm_state: str | None = None
     last_allocation_log_path: str | None = None
     last_allocation_failure_summary: str | None = None
+    # Blocked-property improvement (generalized Strategy 3)
+    blocked_property_phase: str = ""
+    target_property: str | None = None
+    property_passed_ever: dict[str, bool] = field(default_factory=dict)
+    property_reached_ever: dict[str, bool] = field(default_factory=dict)
+    incumbent_property_obj: float | None = None
 
     def touch(self, **kwargs: Any) -> None:
         for key, val in kwargs.items():
