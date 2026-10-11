@@ -1,0 +1,24 @@
+"""Time-based first-unpassed hierarchy switching — shared constants."""
+
+from __future__ import annotations
+
+ORCHESTRATOR_TIME_BASED_FIRST_UNPASSED = "time_based_first_unpassed_hierarchy"
+ORCHESTRATOR_BLOCKED_PROPERTY_IMPROVEMENT = "blocked_property_improvement"
+
+DEFAULT_ACTIVE_HIERARCHY: tuple[str, ...] = (
+    "lattice",
+    "ce",
+    "eos",
+    "phonon",
+    "elastic",
+)
+
+DEFAULT_OBSERVATION_WINDOW = "05:00:00"
+DEFAULT_MAX_CONSECUTIVE_FAILED_ALLOCATIONS = 3
+
+DECISION_SWITCH = "SWITCH"
+DECISION_ALL_PROPERTIES_PASSED = "ALL_PROPERTIES_PASSED"
+DECISION_NO_SWAPPABLE_PROPERTY = "NO_SWAPPABLE_PROPERTY"
+DECISION_SWITCH_SKIPPED_MAX = "SWITCH_SKIPPED_MAX_SWITCHES"
+
+VALID_HIERARCHY_PROPERTIES = frozenset(DEFAULT_ACTIVE_HIERARCHY)
