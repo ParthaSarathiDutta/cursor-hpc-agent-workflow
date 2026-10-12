@@ -109,6 +109,13 @@ polymorphs_ce = list(all_polymorphs[i] for i in [0, 1])
 
 ---
 
+## AgenticBLAST orchestrator strategies
+
+- **Strategy 4 (`time_based_first_unpassed_hierarchy`):** After each productive/acceptable GPU allocation, cron runs the same Range path as Strategy 1 via `hooks.run_range` → `run_range_update_local` with `selection_strategy=overall` (min `finalObj`, full 13-parameter recenter). Observation-window hierarchy SWITCH still only adjacent-swaps `main1.py` and resets MCTS tree files; it must not rewrite `model.json` / `mcts_restart.tersoff` from the last Range. SWITCH-aborted allocations skip Range.
+- **Strategy 4 Range provenance:** Each live Range appends `.agentic_loop/strategy4_range_events.jsonl` (gpu_job_id, overall selection, best_iteration/score, sha256 before/after model + restart, optional 13-vector). SWITCH-aborted allocations do not append.
+
+---
+
 ## Keep material-agnostic
 
 Use config placeholders (`${TRAINING_DATA_ROOT}`, `${ELEMENT_PAIR}`) — do not hardcode structure names, element names, or CFS project IDs in shared framework code.

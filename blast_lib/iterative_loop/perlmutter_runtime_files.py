@@ -28,6 +28,7 @@ PERLMUTTER_RUNTIME_REL_PATHS: tuple[str, ...] = (
     "blast_lib/iterative_loop/hierarchy_window.py",
     "blast_lib/iterative_loop/hierarchy_provenance.py",
     "blast_lib/iterative_loop/hierarchy_switch.py",
+    "blast_lib/iterative_loop/strategy4_range_provenance.py",
     "blast_lib/iterative_loop/main1_hierarchy.py",
     "blast_lib/iterative_loop/region_provenance.py",
     "blast_lib/trial_details.py",

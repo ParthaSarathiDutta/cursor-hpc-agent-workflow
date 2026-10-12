@@ -54,6 +54,10 @@ from blast_lib.iterative_loop.hierarchy_provenance import (
     reset_mcts_tree_files,
 )
 from blast_lib.iterative_loop.hierarchy_switch import apply_hierarchy_switch_local
+from blast_lib.iterative_loop.strategy4_range_provenance import (
+    record_strategy4_range_outcome,
+    sha256_file as strategy4_sha256_file,
+)
 from blast_lib.iterative_loop.hierarchy_window import HierarchyObservationWindow
 from blast_lib.iterative_loop.hierarchy_pass_counts import normalize_hierarchy
 from blast_lib.iterative_loop.selection_strategy import (
@@ -169,7 +173,7 @@ class OrchestratorHooks:
     """Injected dependencies for tests and the live orchestrator script."""
 
     run_shell: Callable[..., SallocRunResult]
-    run_range: Callable[[Path, str, int, str, str], RangeUpdateResult]
+    run_range: Callable[..., RangeUpdateResult]
     count_trials: Callable[[Path], int]
     sleep: Callable[[float], None]
     load_workflow: Callable[[Path], Any]
@@ -529,7 +533,7 @@ def run_time_based_first_unpassed_hierarchy_orchestrator(
     hooks: OrchestratorHooks,
     cfg: StrategyConfig,
 ) -> int:
-    """Observation-window pass counts → adjacent swap in main1.py; no model.json recenter."""
+    """Strategy 4: observation-window hierarchy switches + Strategy 1 overall min-finalObj Range after each GPU."""
     run_folder = Path(wf.run_folder)
     rp = run_folder / "reports" / "ho.report"
 
@@ -743,9 +747,54 @@ def run_time_based_first_unpassed_hierarchy_orchestrator(
         if productive or acceptable:
             wf.consecutive_failed_allocations = 0
             wf.last_allocation_failure_summary = None
+            if not result.job_id:
+                return _fail(
+                    wf_path,
+                    wf,
+                    hooks,
+                    "Hierarchy allocation ended productively but job id is missing for Range update.",
+                )
+            wf.phase = WorkflowPhase.RUNNING_RANGE
+            wf.status_message = (
+                f"Hierarchy epoch {wf.hierarchy_epoch}: Range update (overall min finalObj)…"
+            )
+            hooks.save_workflow(wf_path, wf)
+            model_path = run_folder / "model.json"
+            restart_path = run_folder / "mcts_restart.tersoff"
+            model_before = strategy4_sha256_file(model_path)
+            restart_before = strategy4_sha256_file(restart_path)
+            range_result = hooks.run_range(
+                run_folder,
+                wf.blast_python,
+                trials_before,
+                str(result.job_id),
+                wf.walltime,
+                selection_strategy=STRATEGY_OVERALL,
+            )
+            model_after = strategy4_sha256_file(model_path)
+            restart_after = strategy4_sha256_file(restart_path)
+            record_strategy4_range_outcome(
+                run_folder,
+                workflow_id=str(wf.workflow_id),
+                gpu_job_id=str(result.job_id),
+                hierarchy_epoch=int(wf.hierarchy_epoch),
+                active_hierarchy=list(wf.active_hierarchy or []),
+                range_result=range_result,
+                model_json_sha256_before=model_before,
+                model_json_sha256_after=model_after,
+                mcts_restart_sha256_before=restart_before,
+                mcts_restart_sha256_after=restart_after,
+            )
+            if not range_result.ok:
+                return _fail(
+                    wf_path,
+                    wf,
+                    hooks,
+                    f"Range failed after hierarchy allocation: {range_result.message}",
+                )
             wf.phase = WorkflowPhase.AWAITING_SALLOC
             wf.status_message = (
-                f"Hierarchy epoch {wf.hierarchy_epoch}: allocation ended; requesting another GPU…"
+                f"Hierarchy epoch {wf.hierarchy_epoch}: Range complete; requesting another GPU…"
             )
             hooks.save_workflow(wf_path, wf)
             continue
@@ -1441,8 +1490,13 @@ def default_hooks(env: dict[str, str] | None = None) -> OrchestratorHooks:
     base = dict(os.environ)
     return OrchestratorHooks(
         run_shell=default_run_shell,
-        run_range=lambda rf, py, before, jid, wt: run_range_update_local(
-            rf, py, scored_before=before, gpu_job_id=jid, walltime=wt
+        run_range=lambda rf, py, before, jid, wt, selection_strategy=None, **_: run_range_update_local(
+            rf,
+            py,
+            scored_before=before,
+            gpu_job_id=jid,
+            walltime=wt,
+            selection_strategy=selection_strategy,
         ),
         count_trials=lambda rp: require_scored_trials_count(rp),
         sleep=time.sleep,
