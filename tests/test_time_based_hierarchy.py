@@ -603,3 +603,410 @@ def test_strategy2_elastic_fixed_cycle_not_hierarchy(tmp_path: Path):
 
     assert not is_time_based_first_unpassed_hierarchy_strategy(cfg)
     assert not is_improvement_elastic_strategy(cfg)
+
+
+# --- Strategy 4 + Strategy 1 Range ---
+
+
+def _normal_gpu_stream_result(*, job_id: str = "888001") -> "SallocRunResult":
+    from blast_lib.iterative_loop.orchestrator_core import SallocRunResult
+
+    return SallocRunResult(
+        returncode=0,
+        combined_output="ok",
+        job_id=job_id,
+        aborted=False,
+    )
+
+
+@patch("blast_lib.iterative_loop.orchestrator_core.stream_shell_run")
+def test_strategy4_productive_allocation_calls_range_once(mock_stream: MagicMock, tmp_path: Path):
+    from blast_lib.iterative_loop.range_types import RangeUpdateResult
+    from blast_lib.iterative_loop.selection_strategy import STRATEGY_OVERALL
+
+    wf = _hierarchy_wf(tmp_path, window_sec=999_999)
+    path = workflow_json_path(wf.run_folder)
+    save_workflow(path, wf)
+    run_range = MagicMock(
+        return_value=RangeUpdateResult(
+            ok=True,
+            message="ok",
+            selection_strategy=STRATEGY_OVERALL,
+            selection_reason="minimum finalObj",
+        )
+    )
+    counts = {"n": 0}
+
+    def count_trials(_rp: Path) -> int:
+        counts["n"] += 1
+        return 0 if counts["n"] <= 1 else 2
+
+    call_n = {"n": 0}
+
+    def fake_stream(cmd, env, on_salloc_granted=None, should_abort=None, on_poll=None, **kw):
+        call_n["n"] += 1
+        if on_salloc_granted:
+            on_salloc_granted("888001")
+        if call_n["n"] >= 2:
+            live = load_workflow(path)
+            live.status = WorkflowStatus.STOPPED
+            save_workflow(path, live)
+        return _normal_gpu_stream_result()
+
+    mock_stream.side_effect = fake_stream
+    hooks = _orchestrator_test_hooks(
+        run_shell=fake_stream,
+        run_range=run_range,
+        count_trials=count_trials,
+    )
+    run_orchestrator(path, step_b="step", hooks=hooks)
+    run_range.assert_called_once()
+    assert run_range.call_args.kwargs.get("selection_strategy") == STRATEGY_OVERALL
+
+
+@patch("blast_lib.iterative_loop.orchestrator_core.run_range_update_local")
+@patch("blast_lib.iterative_loop.orchestrator_core.stream_shell_run")
+def test_strategy4_range_uses_run_range_update_local_overall(
+    mock_stream: MagicMock, mock_range_local: MagicMock, tmp_path: Path
+):
+    from dataclasses import replace
+
+    from blast_lib.iterative_loop.orchestrator_core import default_hooks
+    from blast_lib.iterative_loop.range_types import RangeUpdateResult
+    from blast_lib.iterative_loop.selection_strategy import STRATEGY_OVERALL
+
+    wf = _hierarchy_wf(tmp_path, window_sec=999_999)
+    path = workflow_json_path(wf.run_folder)
+    save_workflow(path, wf)
+    mock_range_local.return_value = RangeUpdateResult(
+        ok=True,
+        message="recentered",
+        selection_strategy=STRATEGY_OVERALL,
+    )
+    counts = {"n": 0}
+
+    def count_trials(_rp: Path) -> int:
+        counts["n"] += 1
+        return 0 if counts["n"] <= 1 else 1
+
+    call_n = {"n": 0}
+
+    def fake_stream(cmd, env, on_salloc_granted=None, should_abort=None, on_poll=None, **kw):
+        call_n["n"] += 1
+        if on_salloc_granted:
+            on_salloc_granted("888002")
+        if call_n["n"] >= 2:
+            live = load_workflow(path)
+            live.status = WorkflowStatus.STOPPED
+            save_workflow(path, live)
+        return _normal_gpu_stream_result(job_id="888002")
+
+    mock_stream.side_effect = fake_stream
+    hooks = replace(
+        default_hooks(),
+        run_shell=fake_stream,
+        count_trials=count_trials,
+    )
+    run_orchestrator(path, step_b="step", hooks=hooks)
+    mock_range_local.assert_called_once()
+    assert mock_range_local.call_args.kwargs.get("selection_strategy") == STRATEGY_OVERALL
+
+
+@patch("blast_lib.iterative_loop.orchestrator_core.stream_shell_run")
+def test_strategy4_switch_abort_does_not_call_range(mock_stream: MagicMock, tmp_path: Path):
+    wf = _hierarchy_wf(tmp_path, window_sec=0)
+    path = workflow_json_path(wf.run_folder)
+    save_workflow(path, wf)
+    run = Path(wf.run_folder)
+    rp = run / "reports" / "ho.report"
+    rp.write_text(
+        _report_with_trials(
+            [
+                _trial(
+                    _stage_block("lattice", passed=True),
+                    _stage_block("ce", passed=True),
+                    _stage_block("eos", passed=True),
+                    _stage_block("phonon", passed=True),
+                    _stage_block("elastic", passed=False),
+                )
+            ]
+        )
+    )
+    run_range = MagicMock()
+
+    def fake_stream(cmd, env, on_salloc_granted=None, should_abort=None, on_poll=None, **kw):
+        if on_salloc_granted:
+            on_salloc_granted("888003")
+        if on_poll:
+            on_poll()
+        from blast_lib.iterative_loop.orchestrator_core import SallocRunResult
+
+        return SallocRunResult(
+            returncode=0,
+            combined_output="ok",
+            job_id="888003",
+            aborted=True,
+            abort_reason="hierarchy_switch",
+        )
+
+    mock_stream.side_effect = fake_stream
+    real_load = load_workflow
+
+    def load_stop_after_switch(p: Path):
+        wf_loaded = real_load(p)
+        if wf_loaded.hierarchy_switch_count >= 1:
+            wf_loaded.status = WorkflowStatus.STOPPED
+        return wf_loaded
+
+    hooks = _orchestrator_test_hooks(
+        run_shell=fake_stream,
+        run_range=run_range,
+        load_workflow=load_stop_after_switch,
+    )
+    run_orchestrator(path, step_b="step", hooks=hooks)
+    run_range.assert_not_called()
+
+
+def test_strategy4_hierarchy_switch_preserves_recentered_restart(tmp_path: Path):
+    """After Strategy-1-style restart update, hierarchy SWITCH must not rewrite model/restart."""
+    from blast_lib.iterative_loop.hierarchy_switch import apply_hierarchy_switch_local
+
+    wf = _hierarchy_wf(tmp_path, window_sec=1)
+    run = Path(wf.run_folder)
+    model_path = run / "model.json"
+    restart_path = run / "mcts_restart.tersoff"
+    recentered_line = "Sb Sb Sb 1 9.0 8.0 7.0 6.0 5.0 4.0 3.0 2.0 1.0 0.5 0.4 0.3 0.2\n"
+    restart_path.write_text(recentered_line)
+    model_before = model_path.read_bytes()
+    restart_before = restart_path.read_bytes()
+
+    trials = [
+        _trial(
+            _stage_block("lattice", passed=True),
+            _stage_block("ce", passed=True),
+            _stage_block("eos", passed=True),
+            _stage_block("phonon", passed=True),
+            _stage_block("elastic", passed=False),
+        )
+    ]
+    decision = decide_after_observation_window(trials, HIERARCHY)
+    assert decision.decision == DECISION_SWITCH
+    result = apply_hierarchy_switch_local(run, decision)
+    assert result.ok
+    assert model_path.read_bytes() == model_before
+    assert restart_path.read_bytes() == restart_before
+
+
+@patch("blast_lib.iterative_loop.orchestrator_core.stream_shell_run")
+def test_strategy4_multiple_ranges_before_switch(mock_stream: MagicMock, tmp_path: Path):
+    from blast_lib.iterative_loop.range_types import RangeUpdateResult
+
+    wf = _hierarchy_wf(tmp_path, window_sec=999_999)
+    path = workflow_json_path(wf.run_folder)
+    save_workflow(path, wf)
+    run_range = MagicMock(return_value=RangeUpdateResult(ok=True, message="ok", selection_strategy="overall"))
+    gpu_calls = {"n": 0}
+    counts = {"n": 0}
+
+    def count_trials(_rp: Path) -> int:
+        counts["n"] += 1
+        return min(counts["n"] - 1, 3)
+
+    def fake_stream(cmd, env, on_salloc_granted=None, should_abort=None, on_poll=None, **kw):
+        gpu_calls["n"] += 1
+        if on_salloc_granted:
+            on_salloc_granted(f"88810{gpu_calls['n']}")
+        if gpu_calls["n"] >= 4:
+            live = load_workflow(path)
+            live.status = WorkflowStatus.STOPPED
+            save_workflow(path, live)
+        return _normal_gpu_stream_result(job_id=f"88810{gpu_calls['n']}")
+
+    mock_stream.side_effect = fake_stream
+    hooks = _orchestrator_test_hooks(
+        run_shell=fake_stream,
+        run_range=run_range,
+        count_trials=count_trials,
+    )
+    run_orchestrator(path, step_b="step", hooks=hooks)
+    assert run_range.call_count == 3
+    assert load_workflow(path).hierarchy_switch_count == 0
+
+
+def _read_strategy4_range_events(run: Path) -> list[dict]:
+    from blast_lib.iterative_loop.strategy4_range_provenance import strategy4_range_events_path
+
+    path = strategy4_range_events_path(run)
+    if not path.is_file():
+        return []
+    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()]
+
+
+@patch("blast_lib.iterative_loop.orchestrator_core.stream_shell_run")
+def test_strategy4_productive_writes_range_provenance_event(mock_stream: MagicMock, tmp_path: Path):
+    from blast_lib.iterative_loop.range_types import RangeUpdateResult
+    from blast_lib.iterative_loop.selection_strategy import STRATEGY_OVERALL
+
+    wf = _hierarchy_wf(tmp_path, window_sec=999_999)
+    path = workflow_json_path(wf.run_folder)
+    save_workflow(path, wf)
+    run = Path(wf.run_folder)
+    model_path = run / "model.json"
+
+    def run_range(rf, py, before, jid, wt, selection_strategy=None, **kw):
+        model_path.write_text('{"model": {"after_range": true}}\n')
+        return RangeUpdateResult(
+            ok=True,
+            message="ok",
+            selection_strategy=STRATEGY_OVERALL,
+            selection_reason="minimum finalObj",
+            best_score=123.45,
+            best_iteration=7,
+            gpu_elapsed_sec=120,
+        )
+
+    counts = {"n": 0}
+
+    def count_trials(_rp: Path) -> int:
+        counts["n"] += 1
+        return 0 if counts["n"] <= 1 else 2
+
+    call_n = {"n": 0}
+
+    def fake_stream(cmd, env, on_salloc_granted=None, should_abort=None, on_poll=None, **kw):
+        call_n["n"] += 1
+        if on_salloc_granted:
+            on_salloc_granted("888201")
+        if call_n["n"] >= 2:
+            live = load_workflow(path)
+            live.status = WorkflowStatus.STOPPED
+            save_workflow(path, live)
+        return _normal_gpu_stream_result(job_id="888201")
+
+    mock_stream.side_effect = fake_stream
+    hooks = _orchestrator_test_hooks(
+        run_shell=fake_stream,
+        run_range=run_range,
+        count_trials=count_trials,
+    )
+    run_orchestrator(path, step_b="step", hooks=hooks)
+    events = _read_strategy4_range_events(run)
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["gpu_job_id"] == "888201"
+    assert ev["selection_strategy"] == STRATEGY_OVERALL
+    assert ev["selection_reason"] == "minimum finalObj"
+    assert ev["best_score"] == 123.45
+    assert ev["best_iteration"] == 7
+    assert ev["ok"] is True
+    assert ev["model_json_sha256_before"]
+    assert ev["model_json_sha256_after"]
+    assert ev["model_json_sha256_before"] != ev["model_json_sha256_after"]
+    assert ev["mcts_restart_sha256_before"] == ev["mcts_restart_sha256_after"]
+
+
+@patch("blast_lib.iterative_loop.orchestrator_core.stream_shell_run")
+def test_strategy4_switch_abort_writes_no_range_provenance(mock_stream: MagicMock, tmp_path: Path):
+    wf = _hierarchy_wf(tmp_path, window_sec=0)
+    path = workflow_json_path(wf.run_folder)
+    save_workflow(path, wf)
+    run = Path(wf.run_folder)
+    rp = run / "reports" / "ho.report"
+    rp.write_text(
+        _report_with_trials(
+            [
+                _trial(
+                    _stage_block("lattice", passed=True),
+                    _stage_block("ce", passed=True),
+                    _stage_block("eos", passed=True),
+                    _stage_block("phonon", passed=True),
+                    _stage_block("elastic", passed=False),
+                )
+            ]
+        )
+    )
+
+    def fake_stream(cmd, env, on_salloc_granted=None, should_abort=None, on_poll=None, **kw):
+        if on_salloc_granted:
+            on_salloc_granted("888301")
+        if on_poll:
+            on_poll()
+        from blast_lib.iterative_loop.orchestrator_core import SallocRunResult
+
+        return SallocRunResult(
+            returncode=0,
+            combined_output="ok",
+            job_id="888301",
+            aborted=True,
+            abort_reason="hierarchy_switch",
+        )
+
+    mock_stream.side_effect = fake_stream
+    real_load = load_workflow
+
+    def load_stop_after_switch(p: Path):
+        wf_loaded = real_load(p)
+        if wf_loaded.hierarchy_switch_count >= 1:
+            wf_loaded.status = WorkflowStatus.STOPPED
+        return wf_loaded
+
+    hooks = _orchestrator_test_hooks(
+        run_shell=fake_stream,
+        load_workflow=load_stop_after_switch,
+    )
+    run_orchestrator(path, step_b="step", hooks=hooks)
+    assert _read_strategy4_range_events(run) == []
+
+
+@patch("blast_lib.iterative_loop.orchestrator_core.stream_shell_run")
+def test_strategy4_multiple_productive_allocations_append_range_events(
+    mock_stream: MagicMock, tmp_path: Path
+):
+    from blast_lib.iterative_loop.range_types import RangeUpdateResult
+
+    wf = _hierarchy_wf(tmp_path, window_sec=999_999)
+    path = workflow_json_path(wf.run_folder)
+    save_workflow(path, wf)
+    run = Path(wf.run_folder)
+    seq = {"i": 0}
+
+    def run_range(rf, py, before, jid, wt, selection_strategy=None, **kw):
+        seq["i"] += 1
+        return RangeUpdateResult(
+            ok=True,
+            message="ok",
+            selection_strategy="overall",
+            selection_reason="minimum finalObj",
+            best_score=float(seq["i"]),
+            best_iteration=seq["i"],
+        )
+
+    gpu_calls = {"n": 0}
+    counts = {"n": 0}
+
+    def count_trials(_rp: Path) -> int:
+        counts["n"] += 1
+        return min(counts["n"] - 1, 3)
+
+    def fake_stream(cmd, env, on_salloc_granted=None, should_abort=None, on_poll=None, **kw):
+        gpu_calls["n"] += 1
+        if on_salloc_granted:
+            on_salloc_granted(f"88840{gpu_calls['n']}")
+        if gpu_calls["n"] >= 4:
+            live = load_workflow(path)
+            live.status = WorkflowStatus.STOPPED
+            save_workflow(path, live)
+        return _normal_gpu_stream_result(job_id=f"88840{gpu_calls['n']}")
+
+    mock_stream.side_effect = fake_stream
+    hooks = _orchestrator_test_hooks(
+        run_shell=fake_stream,
+        run_range=run_range,
+        count_trials=count_trials,
+    )
+    run_orchestrator(path, step_b="step", hooks=hooks)
+    events = _read_strategy4_range_events(run)
+    assert len(events) == 3
+    assert [e["best_iteration"] for e in events] == [1, 2, 3]
+    assert events[0]["gpu_job_id"] == "888401"
+    assert events[-1]["gpu_job_id"] == "888403"

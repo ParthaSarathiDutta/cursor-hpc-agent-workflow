@@ -102,6 +102,7 @@ def run_range_update_local(
     scored_before: int,
     gpu_job_id: str,
     walltime: str,
+    selection_strategy: str | None = None,
 ) -> RangeUpdateResult:
     run_folder = run_folder.resolve()
     rp = ho_report_path(run_folder)
@@ -137,7 +138,7 @@ def run_range_update_local(
             message=f"No new scored trials (before={scored_before}, after={after}).",
         )
 
-    strategy = load_selection_strategy(run_folder)
+    strategy = selection_strategy or load_selection_strategy(run_folder)
     if strategy == STRATEGY_ELASTIC and count_elastic_eligible_trials(rp) == 0:
         return RangeUpdateResult(
             ok=False,
